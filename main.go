@@ -123,6 +123,14 @@ func main() {
 		}
 	}
 
+	if err := run(); err != nil {
+		log.Fatalf("%v", err)
+	}
+}
+
+// run contains the main logic, separated from main() so that defers
+// (particularly temp dir cleanup) execute even on error paths.
+func run() error {
 	// Slirp4netns-compatible flags. Podman constructs these.
 	configure := flag.Bool("c", false, "configure interface")
 	readyFD := flag.Int("r", -1, "ready fd")
@@ -143,22 +151,22 @@ func main() {
 	warnUnsupportedFlags(*enableSandbox, *enableSeccomp)
 
 	if err := validateMTU(*mtu); err != nil {
-		log.Fatalf("%v", err)
+		return err
 	}
 
 	args := flag.Args()
 	if len(args) < 2 {
-		log.Fatalf("usage: ts4nsnet [OPTIONS] NSPATH TUNNAME")
+		return fmt.Errorf("usage: ts4nsnet [OPTIONS] NSPATH TUNNAME")
 	}
 	nsPath, err := resolveNSPath(args[0], *netnsType)
 	if err != nil {
-		log.Fatalf("resolving namespace path: %v", err)
+		return fmt.Errorf("resolving namespace path: %v", err)
 	}
 	tunName := args[1]
 
 	cfg, err := parseEnvConfig()
 	if err != nil {
-		log.Fatalf("%v", err)
+		return err
 	}
 	// Clear sensitive env vars so they aren't exposed via /proc/<pid>/environ.
 	os.Unsetenv("TS_AUTHKEY")
@@ -166,7 +174,7 @@ func main() {
 	// Create TUN device inside the container's network namespace.
 	tunDev, err := createTUNInNamespace(nsPath, tunName, *mtu)
 	if err != nil {
-		log.Fatalf("creating TUN in namespace: %v", err)
+		return fmt.Errorf("creating TUN in namespace: %v", err)
 	}
 
 	// Set up a state directory for tsnet. If TS_STATE_DIR is set, use it
@@ -177,7 +185,7 @@ func main() {
 	if stateDir == "" {
 		d, err := os.MkdirTemp("", "ts4nsnet-*")
 		if err != nil {
-			log.Fatalf("creating state directory: %v", err)
+			return fmt.Errorf("creating state directory: %v", err)
 		}
 		stateDir = d
 		defer os.RemoveAll(stateDir)
@@ -201,7 +209,7 @@ func main() {
 
 	status, err := srv.Up(ctx)
 	if err != nil {
-		log.Fatalf("tsnet.Up: %v", err)
+		return fmt.Errorf("tsnet.Up: %v", err)
 	}
 
 	// Extract assigned tailnet IPs.
@@ -220,11 +228,11 @@ func main() {
 	if cfg.ExitNode != "" {
 		exitIP, err := netip.ParseAddr(cfg.ExitNode)
 		if err != nil {
-			log.Fatalf("parsing TS_EXIT_NODE %q: %v", cfg.ExitNode, err)
+			return fmt.Errorf("parsing TS_EXIT_NODE %q: %v", cfg.ExitNode, err)
 		}
 		lc, err := srv.LocalClient()
 		if err != nil {
-			log.Fatalf("getting local client: %v", err)
+			return fmt.Errorf("getting local client: %v", err)
 		}
 		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			Prefs: ipn.Prefs{
@@ -233,7 +241,7 @@ func main() {
 			ExitNodeIPSet: true,
 		})
 		if err != nil {
-			log.Fatalf("setting exit node: %v", err)
+			return fmt.Errorf("setting exit node: %v", err)
 		}
 		log.Printf("exit node set to %v", exitIP)
 	}
@@ -241,7 +249,7 @@ func main() {
 	// Configure the interface inside the container namespace.
 	if *configure {
 		if err := configureInterface(nsPath, tunName, ip4, ip6, *mtu); err != nil {
-			log.Fatalf("configuring interface: %v", err)
+			return fmt.Errorf("configuring interface: %v", err)
 		}
 		log.Printf("interface %s configured", tunName)
 	}
@@ -251,7 +259,7 @@ func main() {
 		f := os.NewFile(uintptr(*readyFD), "ready-fd")
 		if f != nil {
 			if _, err := f.Write([]byte("1")); err != nil {
-				log.Fatalf("writing to ready fd: %v", err)
+				return fmt.Errorf("writing to ready fd: %v", err)
 			}
 			f.Close()
 		}
@@ -284,5 +292,6 @@ func main() {
 	}
 
 	srv.Close()
+	return nil
 }
 
