@@ -76,6 +76,8 @@ func (t *fdTUN) BatchSize() int { return 1 }
 func (t *fdTUN) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
+		t.events <- tun.EventDown
+		close(t.events)
 		err = t.file.Close()
 	})
 	return err

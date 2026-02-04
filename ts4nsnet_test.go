@@ -113,6 +113,38 @@ func TestParseEnvConfig(t *testing.T) {
 	}
 }
 
+func TestFdTUNCloseEvents(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer w.Close()
+
+	dev := newFDTUN(r, "test0", 1500)
+
+	// Drain the initial EventUp.
+	ev := <-dev.Events()
+	if ev != tun.EventUp {
+		t.Fatalf("expected EventUp, got %v", ev)
+	}
+
+	if err := dev.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Should receive EventDown.
+	ev = <-dev.Events()
+	if ev != tun.EventDown {
+		t.Fatalf("expected EventDown, got %v", ev)
+	}
+
+	// Channel should be closed.
+	_, ok := <-dev.Events()
+	if ok {
+		t.Fatal("expected events channel to be closed")
+	}
+}
+
 func TestIgnoredFlags(t *testing.T) {
 	args := []string{
 		"-c",
