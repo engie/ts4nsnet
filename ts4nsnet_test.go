@@ -113,6 +113,27 @@ func TestParseEnvConfig(t *testing.T) {
 	}
 }
 
+func TestValidateMTU(t *testing.T) {
+	tests := []struct {
+		mtu     int
+		wantErr bool
+	}{
+		{1500, false},
+		{1280, false},
+		{65535, false},
+		{1279, true},
+		{65536, true},
+		{0, true},
+		{-1, true},
+	}
+	for _, tt := range tests {
+		err := validateMTU(tt.mtu)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateMTU(%d) error = %v, wantErr %v", tt.mtu, err, tt.wantErr)
+		}
+	}
+}
+
 func TestFdTUNCloseEvents(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {

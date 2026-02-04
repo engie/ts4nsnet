@@ -69,6 +69,15 @@ func warnUnsupportedFlags(enableSandbox, enableSeccomp bool) {
 	}
 }
 
+// validateMTU checks that the MTU is within a usable range.
+// The minimum is 1280 (required by IPv6) and the maximum is 65535.
+func validateMTU(mtu int) error {
+	if mtu < 1280 || mtu > 65535 {
+		return fmt.Errorf("MTU %d is out of range [1280, 65535]", mtu)
+	}
+	return nil
+}
+
 // resolveNSPath returns the network namespace path. If netnsType is "path",
 // nsArg is returned as-is. Otherwise it is treated as a PID and resolved to
 // /proc/<pid>/ns/net.
@@ -128,6 +137,10 @@ func main() {
 	flag.Parse()
 
 	warnUnsupportedFlags(*enableSandbox, *enableSeccomp)
+
+	if err := validateMTU(*mtu); err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	args := flag.Args()
 	if len(args) < 2 {
