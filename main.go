@@ -199,7 +199,9 @@ func main() {
 	if *readyFD >= 0 {
 		f := os.NewFile(uintptr(*readyFD), "ready-fd")
 		if f != nil {
-			f.Write([]byte("1"))
+			if _, err := f.Write([]byte("1")); err != nil {
+				log.Fatalf("writing to ready fd: %v", err)
+			}
 			f.Close()
 		}
 	}
