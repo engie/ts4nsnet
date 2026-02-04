@@ -25,7 +25,6 @@ type fdTUN struct {
 	events chan tun.Event
 
 	closeOnce sync.Once
-	closed    chan struct{}
 }
 
 func newFDTUN(file *os.File, name string, mtu int) *fdTUN {
@@ -34,7 +33,6 @@ func newFDTUN(file *os.File, name string, mtu int) *fdTUN {
 		name:   name,
 		mtu:    mtu,
 		events: make(chan tun.Event, 1),
-		closed: make(chan struct{}),
 	}
 	t.events <- tun.EventUp
 	return t
@@ -78,7 +76,6 @@ func (t *fdTUN) BatchSize() int { return 1 }
 func (t *fdTUN) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
-		close(t.closed)
 		err = t.file.Close()
 	})
 	return err

@@ -193,6 +193,7 @@ func (ct *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 }
 
 func (ct *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
+	written := 0
 	for _, buf := range bufs {
 		pkt := buf[offset:]
 		if len(pkt) == 0 {
@@ -200,11 +201,12 @@ func (ct *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
 		}
 		select {
 		case <-ct.closed:
-			return 0, errors.New("closed")
+			return written, errors.New("closed")
 		case ct.Inbound <- slices.Clone(pkt):
 		}
+		written++
 	}
-	return len(bufs), nil
+	return written, nil
 }
 
 func (ct *chanTUN) MTU() (int, error)        { return 1280, nil }
