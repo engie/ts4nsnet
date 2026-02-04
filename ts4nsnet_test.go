@@ -58,38 +58,29 @@ func TestResolveNSPath(t *testing.T) {
 }
 
 func TestParseEnvConfig(t *testing.T) {
-	origAuth := os.Getenv("TS_AUTHKEY")
-	origHost := os.Getenv("TS_HOSTNAME")
-	origExit := os.Getenv("TS_EXIT_NODE")
-	origCtrl := os.Getenv("TS_CONTROL_URL")
-	t.Cleanup(func() {
-		os.Setenv("TS_AUTHKEY", origAuth)
-		os.Setenv("TS_HOSTNAME", origHost)
-		os.Setenv("TS_EXIT_NODE", origExit)
-		os.Setenv("TS_CONTROL_URL", origCtrl)
-	})
-
 	// Missing authkey.
-	os.Setenv("TS_AUTHKEY", "")
-	os.Setenv("TS_HOSTNAME", "test")
+	t.Setenv("TS_AUTHKEY", "")
+	t.Setenv("TS_HOSTNAME", "test")
+	t.Setenv("TS_EXIT_NODE", "")
+	t.Setenv("TS_CONTROL_URL", "")
 	_, err := parseEnvConfig()
 	if err == nil {
 		t.Fatal("expected error for missing TS_AUTHKEY")
 	}
 
 	// Missing hostname.
-	os.Setenv("TS_AUTHKEY", "tskey-auth-test")
-	os.Setenv("TS_HOSTNAME", "")
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	t.Setenv("TS_HOSTNAME", "")
 	_, err = parseEnvConfig()
 	if err == nil {
 		t.Fatal("expected error for missing TS_HOSTNAME")
 	}
 
 	// Valid config.
-	os.Setenv("TS_AUTHKEY", "tskey-auth-test")
-	os.Setenv("TS_HOSTNAME", "myhost")
-	os.Setenv("TS_EXIT_NODE", "100.64.1.1")
-	os.Setenv("TS_CONTROL_URL", "https://control.example.com")
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	t.Setenv("TS_HOSTNAME", "myhost")
+	t.Setenv("TS_EXIT_NODE", "100.64.1.1")
+	t.Setenv("TS_CONTROL_URL", "https://control.example.com")
 	cfg, err := parseEnvConfig()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
