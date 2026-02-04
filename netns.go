@@ -302,6 +302,9 @@ func getIfindex(name string) (int32, error) {
 }
 
 // addAddr4 adds an IPv4 /32 address to the named interface via netlink.
+//
+// Netlink attributes must be aligned to NLA_ALIGNTO (4 bytes). The attribute
+// payloads used here (4-byte IPv4 addr) produce naturally aligned lengths (8).
 func addAddr4(name string, addr netip.Addr) error {
 	ifindex, err := getIfindex(name)
 	if err != nil {
@@ -310,7 +313,7 @@ func addAddr4(name string, addr netip.Addr) error {
 
 	hdrLen := unix.SizeofNlMsghdr
 	ifaLen := 8 // sizeof(struct ifaddrmsg)
-	rtaLen := 4 + 4
+	rtaLen := 4 + 4 // rta_hdr (4) + IPv4 addr (4) = 8, naturally 4-byte aligned
 
 	totalLen := hdrLen + ifaLen + rtaLen
 	buf := make([]byte, totalLen)
@@ -339,6 +342,9 @@ func addAddr4(name string, addr netip.Addr) error {
 }
 
 // addAddr6 adds an IPv6 /128 address to the named interface via netlink.
+//
+// Netlink attributes must be aligned to NLA_ALIGNTO (4 bytes). The attribute
+// payloads used here (16-byte IPv6 addr) produce naturally aligned lengths (20).
 func addAddr6(name string, addr netip.Addr) error {
 	ifindex, err := getIfindex(name)
 	if err != nil {
@@ -347,7 +353,7 @@ func addAddr6(name string, addr netip.Addr) error {
 
 	hdrLen := unix.SizeofNlMsghdr
 	ifaLen := 8
-	rtaLen := 4 + 16
+	rtaLen := 4 + 16 // rta_hdr (4) + IPv6 addr (16) = 20, naturally 4-byte aligned
 
 	totalLen := hdrLen + ifaLen + rtaLen
 	buf := make([]byte, totalLen)
@@ -396,6 +402,9 @@ func addRoute4Default(name string) error {
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
+	// struct rtmsg (12 bytes): family, dst_len, src_len, tos,
+	// table, protocol, scope, type, flags(u32).
+	// flags (off+8..off+11) left zero via zero-initialized buffer.
 	off := hdrLen
 	buf[off+0] = unix.AF_INET
 	buf[off+1] = 0
@@ -435,6 +444,9 @@ func addRoute6Default(name string) error {
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
+	// struct rtmsg (12 bytes): family, dst_len, src_len, tos,
+	// table, protocol, scope, type, flags(u32).
+	// flags (off+8..off+11) left zero via zero-initialized buffer.
 	off := hdrLen
 	buf[off+0] = unix.AF_INET6
 	buf[off+1] = 0
