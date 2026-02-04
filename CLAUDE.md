@@ -37,12 +37,11 @@ CI runs only Tier 1 tests, `go vet`, and build.
 
 ## Architecture
 
-Four source files, single package `main`:
+Three source files, single package `main`:
 
 - **main.go** — Entry point, CLI flag parsing (slirp4netns-compatible), env config (`TS_AUTHKEY`, `TS_HOSTNAME`, `TS_EXIT_NODE`, `TS_CONTROL_URL`), tsnet server lifecycle, ready/exit fd coordination with podman, signal handling.
-- **netns.go** — Network namespace operations. `createTUNInNamespace()` uses a sacrificial goroutine pattern (LockOSThread + Setns, thread never returned) to create a TUN in the container's namespace. Interface configuration has two paths: `configureWithIP()` (shells out to `ip` command) and `configureWithNetlink()` (raw netlink socket fallback).
+- **netns.go** — Network namespace operations. `createTUNInNamespace()` uses a sacrificial goroutine pattern (LockOSThread + Setns, thread never returned) to create a TUN in the container's namespace. Interface configuration uses raw netlink/ioctl syscalls (no external dependencies).
 - **tun.go** — `fdTUN` struct implementing the `tun.Device` interface, wrapping the file descriptor from namespace creation for use by tsnet.
-- **endian.go** — Runtime CPU byte-order detection for netlink message serialization.
 
 ### Key pattern: Sacrificial goroutine
 
