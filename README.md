@@ -31,10 +31,11 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TS_AUTHKEY` | Yes | Tailscale auth key for the ephemeral node. Remains in the process environment for the lifetime of the process and is visible in `/proc/<pid>/environ` to anything in the same user namespace. Use ephemeral, single-use auth keys. |
+| `TS_AUTHKEY` | Yes | Tailscale auth key for the ephemeral node. Cleared from the process environment after reading. Use ephemeral, single-use auth keys. |
 | `TS_HOSTNAME` | Yes | Hostname to register on the tailnet |
 | `TS_EXIT_NODE` | No | IP address of an exit node to route traffic through |
 | `TS_CONTROL_URL` | No | Custom control server URL |
+| `TS_STATE_DIR` | No | Directory for tsnet state. Defaults to a per-instance temp directory cleaned up on shutdown. |
 
 ## How it works
 
@@ -45,7 +46,7 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
 3. A `tsnet.Server` is started with the TUN device, connecting to the Tailscale
    control plane using the provided auth key.
 4. Once connected, the TUN interface is configured with the assigned tailnet IPs
-   and default routes (using `ip` commands or raw netlink).
+   and default routes using raw netlink syscalls.
 5. The container's traffic flows through the TUN into the tsnet engine, which
    handles WireGuard encryption and routing over the tailnet.
 
@@ -53,7 +54,7 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
 
 ```sh
 # Unit tests (no root required)
-go test -run 'TestResolveNSPath|TestParseEnvConfig|TestIgnoredFlags' -v ./...
+go test -run 'TestResolveNSPath|TestParseEnvConfig|TestValidateMTU|TestFdTUNCloseEvents|TestIgnoredFlags' -v ./...
 
 # Integration tests with fake control server (no root required)
 go test -run 'TestTsnetConnectsToControl|TestTwoNodesCanCommunicate|TestExitNodeConfig' -v ./...

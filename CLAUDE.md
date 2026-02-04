@@ -18,7 +18,7 @@ go build -o ts4nsnet .
 go vet ./...
 
 # Tier 1: Unit tests (no root, no network)
-go test -run 'TestResolveNSPath|TestParseEnvConfig|TestIgnoredFlags' -v ./...
+go test -run 'TestResolveNSPath|TestParseEnvConfig|TestValidateMTU|TestFdTUNCloseEvents|TestIgnoredFlags' -v ./...
 
 # Tier 2: Integration tests (no root, fake control + chanTUN)
 go test -run 'TestTsnetConnectsToControl|TestTwoNodesCanCommunicate|TestExitNodeConfig' -v ./...
@@ -39,7 +39,7 @@ CI runs only Tier 1 tests, `go vet`, and build.
 
 Three source files, single package `main`:
 
-- **main.go** — Entry point, CLI flag parsing (slirp4netns-compatible), env config (`TS_AUTHKEY`, `TS_HOSTNAME`, `TS_EXIT_NODE`, `TS_CONTROL_URL`), tsnet server lifecycle, ready/exit fd coordination with podman, signal handling.
+- **main.go** — Entry point, CLI flag parsing (slirp4netns-compatible), env config (`TS_AUTHKEY`, `TS_HOSTNAME`, `TS_EXIT_NODE`, `TS_CONTROL_URL`, `TS_STATE_DIR`), tsnet server lifecycle, ready/exit fd coordination with podman, signal handling.
 - **netns.go** — Network namespace operations. `createTUNInNamespace()` uses a sacrificial goroutine pattern (LockOSThread + Setns, thread never returned) to create a TUN in the container's namespace. Interface configuration uses raw netlink/ioctl syscalls (no external dependencies).
 - **tun.go** — `fdTUN` struct implementing the `tun.Device` interface, wrapping the file descriptor from namespace creation for use by tsnet.
 
