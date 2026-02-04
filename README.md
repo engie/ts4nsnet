@@ -50,6 +50,10 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
 5. The container's traffic flows through the TUN into the tsnet engine, which
    handles WireGuard encryption and routing over the tailnet.
 
+**Note:** Tailscale enables [logtail](https://pkg.go.dev/tailscale.com/logtail)
+by default. Diagnostic logs may be uploaded to `log.tailscale.com` during
+runtime. This is standard Tailscale behavior.
+
 ## Testing
 
 ```sh
