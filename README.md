@@ -22,6 +22,8 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
   podman run --rm -it \
     --network-cmd-path=/path/to/ts4nsnet \
     --network slirp4netns \
+    --dns=100.100.100.100 \
+    --dns-search=MY_TAILNET_DOMAIN(e.g. tail12a34b).ts.net \
     alpine sh
 ```
 
@@ -62,6 +64,18 @@ sudo go test -run 'TestCreateTUNInNamespace|TestConfigureInterface' -v ./...
 # Full end-to-end (requires root)
 sudo go test -run 'TestFullFlow' -v ./...
 ```
+
+## TODO
+
+- **Automatic MagicDNS search domain:** The tailnet's MagicDNS suffix (e.g.
+  `tail38f29f.ts.net`) is available from the tsnet status after connecting, but
+  there's currently no way to inject it into the container's `/etc/resolv.conf`
+  as a search domain. Podman manages resolv.conf itself (via bind mount), and
+  ts4nsnet only enters the network namespace, not the mount namespace. For now,
+  users can pass `--dns-search=<tailnet-domain>` to podman if they know their
+  domain. A proper solution likely requires coordination with the podman team to
+  support a callback or protocol for the network command to communicate DNS
+  search domains back to podman.
 
 ## License
 
