@@ -25,6 +25,9 @@ import (
 // goroutine: it calls LockOSThread to pin itself to an OS thread, enters the
 // container netns one-way, creates the TUN, sends the fd back via a channel,
 // and exits. The pinned thread is discarded by the Go runtime.
+//
+// This permanently leaks one OS thread. Together with configureInterface,
+// a total of two OS threads are leaked per process lifetime.
 func createTUNInNamespace(nsPath, tunName string, mtu int) (tun.Device, error) {
 	type result struct {
 		fd  int
@@ -105,6 +108,9 @@ func createRawTUN(name string) (int, error) {
 // This enters the container netns on a locked OS thread. In rootless podman,
 // we cannot return to the initial netns, so the locked thread stays in the
 // container ns and is discarded by the Go runtime when the goroutine exits.
+//
+// This permanently leaks one OS thread. Together with createTUNInNamespace,
+// a total of two OS threads are leaked per process lifetime.
 func configureInterface(nsPath, tunName string, ip4, ip6 netip.Addr, mtu int) error {
 	errCh := make(chan error, 1)
 	go func() {
