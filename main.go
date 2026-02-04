@@ -128,6 +128,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
+	// Clear sensitive env vars so they aren't exposed via /proc/<pid>/environ.
+	os.Unsetenv("TS_AUTHKEY")
 
 	// Create TUN device inside the container's network namespace.
 	tunDev, err := createTUNInNamespace(nsPath, tunName, *mtu)
