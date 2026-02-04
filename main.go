@@ -217,7 +217,9 @@ func main() {
 			go func() {
 				buf := make([]byte, 1)
 				// Read blocks until HUP/EOF.
-				f.Read(buf)
+				if _, err := f.Read(buf); err != nil {
+					log.Printf("exit fd read error: %v", err)
+				}
 				close(exitCh)
 			}()
 		}
