@@ -36,14 +36,21 @@ func TestResolveNSPath(t *testing.T) {
 		nsArg     string
 		netnsType string
 		want      string
+		wantErr   bool
 	}{
-		{"/run/netns/test", "path", "/run/netns/test"},
-		{"12345", "pid", "/proc/12345/ns/net"},
-		{"/some/path", "path", "/some/path"},
-		{"1", "", "/proc/1/ns/net"},
+		{"/run/netns/test", "path", "/run/netns/test", false},
+		{"12345", "pid", "/proc/12345/ns/net", false},
+		{"/some/path", "path", "/some/path", false},
+		{"1", "", "/proc/1/ns/net", false},
+		{"../../etc", "pid", "", true},
+		{"notanumber", "", "", true},
 	}
 	for _, tt := range tests {
-		got := resolveNSPath(tt.nsArg, tt.netnsType)
+		got, err := resolveNSPath(tt.nsArg, tt.netnsType)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("resolveNSPath(%q, %q) error = %v, wantErr %v", tt.nsArg, tt.netnsType, err, tt.wantErr)
+			continue
+		}
 		if got != tt.want {
 			t.Errorf("resolveNSPath(%q, %q) = %q, want %q", tt.nsArg, tt.netnsType, got, tt.want)
 		}

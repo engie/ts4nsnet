@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"tailscale.com/ipn"
@@ -56,11 +57,14 @@ func parseEnvConfig() (envConfig, error) {
 // resolveNSPath returns the network namespace path. If netnsType is "path",
 // nsArg is returned as-is. Otherwise it is treated as a PID and resolved to
 // /proc/<pid>/ns/net.
-func resolveNSPath(nsArg, netnsType string) string {
+func resolveNSPath(nsArg, netnsType string) (string, error) {
 	if netnsType == "path" {
-		return nsArg
+		return nsArg, nil
 	}
-	return "/proc/" + nsArg + "/ns/net"
+	if _, err := strconv.Atoi(nsArg); err != nil {
+		return "", fmt.Errorf("invalid PID %q: %w", nsArg, err)
+	}
+	return "/proc/" + nsArg + "/ns/net", nil
 }
 
 func main() {
@@ -112,7 +116,10 @@ func main() {
 	if len(args) < 2 {
 		log.Fatalf("usage: ts4nsnet [OPTIONS] NSPATH TUNNAME")
 	}
-	nsPath := resolveNSPath(args[0], *netnsType)
+	nsPath, err := resolveNSPath(args[0], *netnsType)
+	if err != nil {
+		log.Fatalf("resolving namespace path: %v", err)
+	}
 	tunName := args[1]
 
 	cfg, err := parseEnvConfig()
