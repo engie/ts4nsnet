@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
@@ -131,54 +129,12 @@ func configureInterface(nsPath, tunName string, ip4, ip6 netip.Addr, mtu int) er
 		}
 
 		// Now in the container namespace. Configure everything.
-		if _, err := exec.LookPath("ip"); err == nil {
-			errCh <- configureWithIP(tunName, ip4, ip6, mtu)
-		} else {
-			errCh <- configureWithNetlink(tunName, ip4, ip6, mtu)
-		}
+		errCh <- configureWithNetlink(tunName, ip4, ip6, mtu)
 	}()
 	return <-errCh
 }
 
-// configureWithIP uses the `ip` command to configure the interface.
-func configureWithIP(tunName string, ip4, ip6 netip.Addr, mtu int) error {
-	cmds := [][]string{
-		{"ip", "link", "set", "lo", "up"},
-		{"ip", "link", "set", tunName, "mtu", fmt.Sprintf("%d", mtu)},
-		{"ip", "link", "set", tunName, "up"},
-	}
-
-	if ip4.IsValid() {
-		cmds = append(cmds,
-			[]string{"ip", "addr", "add", ip4.String() + "/32", "dev", tunName},
-			[]string{"ip", "route", "add", "default", "dev", tunName},
-		)
-	}
-
-	for _, args := range cmds {
-		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
-			return fmt.Errorf("running %s: %w: %s", strings.Join(args, " "), err, out)
-		}
-	}
-
-	// IPv6 is non-fatal.
-	if ip6.IsValid() {
-		ipv6Cmds := [][]string{
-			{"ip", "-6", "addr", "add", ip6.String() + "/128", "dev", tunName},
-			{"ip", "-6", "route", "add", "default", "dev", tunName},
-		}
-		for _, args := range ipv6Cmds {
-			if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
-				fmt.Fprintf(os.Stderr, "ts4nsnet: warning: %s: %v: %s\n", strings.Join(args, " "), err, out)
-			}
-		}
-	}
-
-	return nil
-}
-
-// configureWithNetlink uses raw netlink/ioctl to configure the interface
-// when the ip command is not available.
+// configureWithNetlink uses raw netlink/ioctl to configure the interface.
 func configureWithNetlink(tunName string, ip4, ip6 netip.Addr, mtu int) error {
 	if err := setLinkUp("lo"); err != nil {
 		return fmt.Errorf("bringing up loopback: %w", err)
