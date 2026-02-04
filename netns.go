@@ -233,6 +233,10 @@ func netlinkRequest(proto int, data []byte) error {
 
 	// Parse the first netlink message header manually.
 	e := binary.NativeEndian
+	msgLen := e.Uint32(buf[0:4])
+	if int(msgLen) > n {
+		return fmt.Errorf("netlink response truncated: header says %d bytes, got %d", msgLen, n)
+	}
 	msgType := e.Uint16(buf[4:6])
 	if msgType == unix.NLMSG_ERROR {
 		if n >= unix.SizeofNlMsghdr+4 {
