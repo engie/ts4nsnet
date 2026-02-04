@@ -5,14 +5,8 @@ go 1.25.6
 require (
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da
 	golang.org/x/sys v0.40.0
-	tailscale.com v1.95.0-pre
+	tailscale.com v1.95.0-pre.0.20260203171007-7b96c4c23e76
 )
-
-// The Tun field on tsnet.Server is not yet in a released version of
-// tailscale.com. Replace with the local checkout until a release
-// containing commit 63d563e73 ("tsnet: add support for a user-supplied
-// tun.Device") is published, then remove this directive and pin to that tag.
-replace tailscale.com => /home/stephen/tailscale
 
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
