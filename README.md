@@ -31,7 +31,7 @@ TS_AUTHKEY=tskey-auth-... TS_HOSTNAME=mycontainer \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TS_AUTHKEY` | Yes | Tailscale auth key for the ephemeral node |
+| `TS_AUTHKEY` | Yes | Tailscale auth key for the ephemeral node. Remains in the process environment for the lifetime of the process and is visible in `/proc/<pid>/environ` to anything in the same user namespace. Use ephemeral, single-use auth keys. |
 | `TS_HOSTNAME` | Yes | Hostname to register on the tailnet |
 | `TS_EXIT_NODE` | No | IP address of an exit node to route traffic through |
 | `TS_CONTROL_URL` | No | Custom control server URL |
