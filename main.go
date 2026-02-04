@@ -56,6 +56,19 @@ func parseEnvConfig() (envConfig, error) {
 	return c, nil
 }
 
+// warnUnsupportedFlags logs warnings for security flags that are accepted
+// for slirp4netns compatibility but cannot be implemented in ts4nsnet.
+// The Go runtime's syscall requirements conflict with slirp4netns's
+// seccomp policy, and ts4nsnet's use of setns prevents mount sandboxing.
+func warnUnsupportedFlags(enableSandbox, enableSeccomp bool) {
+	if enableSandbox {
+		log.Printf("warning: --enable-sandbox is not supported by ts4nsnet and will be ignored")
+	}
+	if enableSeccomp {
+		log.Printf("warning: --enable-seccomp is not supported by ts4nsnet and will be ignored")
+	}
+}
+
 // resolveNSPath returns the network namespace path. If netnsType is "path",
 // nsArg is returned as-is. Otherwise it is treated as a PID and resolved to
 // /proc/<pid>/ns/net.
@@ -107,12 +120,14 @@ func main() {
 	// Ignored slirp4netns flags (accepted for compatibility).
 	flag.String("cidr", "", "ignored")
 	flag.Bool("disable-host-loopback", false, "ignored")
-	flag.Bool("enable-sandbox", false, "ignored")
-	flag.Bool("enable-seccomp", false, "ignored")
+	enableSandbox := flag.Bool("enable-sandbox", false, "ignored")
+	enableSeccomp := flag.Bool("enable-seccomp", false, "ignored")
 	flag.Bool("enable-ipv6", false, "ignored")
 	flag.String("api-socket", "", "ignored")
 
 	flag.Parse()
+
+	warnUnsupportedFlags(*enableSandbox, *enableSeccomp)
 
 	args := flag.Args()
 	if len(args) < 2 {
