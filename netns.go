@@ -206,7 +206,10 @@ func setLinkMTU(name string, mtu int) error {
 	return unix.IoctlIfreq(fd, unix.SIOCSIFMTU, ifr)
 }
 
-// netlinkRequest sends a netlink message and checks for errors.
+// netlinkRequest sends a netlink message and expects a single NLMSG_ERROR
+// response (errno 0 = ACK). This is only suitable for mutation operations
+// (RTM_NEWADDR, RTM_NEWROUTE) with NLM_F_ACK; it will reject multipart
+// responses that require looping.
 func netlinkRequest(proto int, data []byte) error {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, proto)
 	if err != nil {
@@ -231,13 +234,19 @@ func netlinkRequest(proto int, data []byte) error {
 		return fmt.Errorf("short netlink response")
 	}
 
-	// Parse the first netlink message header manually.
 	e := binary.NativeEndian
 	msgLen := e.Uint32(buf[0:4])
 	if int(msgLen) > n {
 		return fmt.Errorf("netlink response truncated: header says %d bytes, got %d", msgLen, n)
 	}
 	msgType := e.Uint16(buf[4:6])
+	msgFlags := e.Uint16(buf[6:8])
+
+	// Reject multipart responses — this function only handles single ACKs.
+	if msgFlags&unix.NLM_F_MULTI != 0 || msgType == unix.NLMSG_DONE {
+		return fmt.Errorf("unexpected multipart netlink response (type=%d, flags=0x%x)", msgType, msgFlags)
+	}
+
 	if msgType == unix.NLMSG_ERROR {
 		if n >= unix.SizeofNlMsghdr+4 {
 			errno := int32(e.Uint32(buf[unix.SizeofNlMsghdr : unix.SizeofNlMsghdr+4]))
@@ -247,7 +256,7 @@ func netlinkRequest(proto int, data []byte) error {
 			return fmt.Errorf("netlink error: %w", unix.Errno(-errno))
 		}
 	}
-	return nil
+	return fmt.Errorf("unexpected netlink response type %d", msgType)
 }
 
 // getIfindex returns the interface index for the named interface.
