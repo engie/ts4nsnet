@@ -288,7 +288,7 @@ func addAddr4(name string, addr netip.Addr) error {
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWADDR)
-	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE)
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
@@ -337,7 +337,7 @@ func addAddr6(name string, addr netip.Addr) error {
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWADDR)
-	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE)
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
@@ -382,7 +382,7 @@ func addRoute4Default(name string) error {
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWROUTE)
-	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE)
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
@@ -424,7 +424,7 @@ func addRoute6Default(name string) error {
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWROUTE)
-	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	e.PutUint16(buf[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE)
 	e.PutUint32(buf[8:12], 1)
 	e.PutUint32(buf[12:16], 0)
 
