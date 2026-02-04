@@ -77,6 +77,16 @@ sudo go test -run 'TestFullFlow' -v ./...
   support a callback or protocol for the network command to communicate DNS
   search domains back to podman.
 
+- **Rootless namespace tests:** Tier 3 and 4 tests (`TestCreateTUNInNamespace`,
+  `TestConfigureInterface`, `TestFullFlow`) require root because they create
+  network namespaces, TUN devices, and configure interfaces. These could run
+  unprivileged by re-exec'ing the test binary under `unshare -Urnm` (user +
+  network + mount namespaces) and mounting a tmpfs on `/run/netns/`. All the
+  privileged operations (setns, TUN creation, netlink) are checked against the
+  owning user namespace, so mapped-root is sufficient. For now, these tests
+  follow the `os.Getuid() != 0 → t.Skip` pattern used throughout the Tailscale
+  codebase.
+
 ## License
 
 BSD 3-Clause — see [LICENSE](LICENSE).
