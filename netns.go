@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net/netip"
 	"os"
@@ -231,7 +232,7 @@ func netlinkRequest(proto int, data []byte) error {
 	}
 
 	// Parse the first netlink message header manually.
-	e := nativeEndian()
+	e := binary.NativeEndian
 	msgType := e.Uint16(buf[4:6])
 	if msgType == unix.NLMSG_ERROR {
 		if n >= unix.SizeofNlMsghdr+4 {
@@ -279,7 +280,7 @@ func addAddr4(name string, addr netip.Addr) error {
 
 	totalLen := hdrLen + ifaLen + 2*rtaLen // IFA_LOCAL + IFA_ADDRESS
 	buf := make([]byte, totalLen)
-	e := nativeEndian()
+	e := binary.NativeEndian
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWADDR)
@@ -328,7 +329,7 @@ func addAddr6(name string, addr netip.Addr) error {
 
 	totalLen := hdrLen + ifaLen + 2*rtaLen // IFA_LOCAL + IFA_ADDRESS
 	buf := make([]byte, totalLen)
-	e := nativeEndian()
+	e := binary.NativeEndian
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWADDR)
@@ -373,7 +374,7 @@ func addRoute4Default(name string) error {
 
 	totalLen := hdrLen + rtmLen + rtaLen
 	buf := make([]byte, totalLen)
-	e := nativeEndian()
+	e := binary.NativeEndian
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWROUTE)
@@ -415,7 +416,7 @@ func addRoute6Default(name string) error {
 
 	totalLen := hdrLen + rtmLen + rtaLen
 	buf := make([]byte, totalLen)
-	e := nativeEndian()
+	e := binary.NativeEndian
 
 	e.PutUint32(buf[0:4], uint32(totalLen))
 	e.PutUint16(buf[4:6], unix.RTM_NEWROUTE)
