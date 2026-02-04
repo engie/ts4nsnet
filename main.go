@@ -34,6 +34,7 @@ type envConfig struct {
 	Hostname   string
 	ExitNode   string
 	ControlURL string
+	StateDir   string
 }
 
 // parseEnvConfig reads and validates ts4nsnet configuration from environment
@@ -44,6 +45,7 @@ func parseEnvConfig() (envConfig, error) {
 		Hostname:   os.Getenv("TS_HOSTNAME"),
 		ExitNode:   os.Getenv("TS_EXIT_NODE"),
 		ControlURL: os.Getenv("TS_CONTROL_URL"),
+		StateDir:   os.Getenv("TS_STATE_DIR"),
 	}
 	if c.AuthKey == "" {
 		return c, fmt.Errorf("TS_AUTHKEY environment variable is required")
@@ -133,6 +135,20 @@ func main() {
 		log.Fatalf("creating TUN in namespace: %v", err)
 	}
 
+	// Set up a state directory for tsnet. If TS_STATE_DIR is set, use it
+	// directly. Otherwise create a per-instance temp directory that is
+	// cleaned up on shutdown to avoid host persistence and collisions
+	// between concurrent containers.
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		d, err := os.MkdirTemp("", "ts4nsnet-*")
+		if err != nil {
+			log.Fatalf("creating state directory: %v", err)
+		}
+		stateDir = d
+		defer os.RemoveAll(stateDir)
+	}
+
 	// Build tsnet server with the real TUN device.
 	srv := &tsnet.Server{
 		Hostname:  cfg.Hostname,
@@ -140,6 +156,7 @@ func main() {
 		Ephemeral: true,
 		Store:     new(mem.Store),
 		Tun:       tunDev,
+		Dir:       stateDir,
 	}
 	if cfg.ControlURL != "" {
 		srv.ControlURL = cfg.ControlURL
