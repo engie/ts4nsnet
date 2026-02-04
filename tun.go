@@ -76,7 +76,13 @@ func (t *fdTUN) BatchSize() int { return 1 }
 func (t *fdTUN) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
-		t.events <- tun.EventDown
+		// Non-blocking send: if the EventUp from newFDTUN was never
+		// drained, the channel is full and a blocking send would
+		// deadlock. The consumer is going away anyway.
+		select {
+		case t.events <- tun.EventDown:
+		default:
+		}
 		close(t.events)
 		err = t.file.Close()
 	})
