@@ -44,6 +44,8 @@ func TestResolveNSPath(t *testing.T) {
 		{"1", "", "/proc/1/ns/net", false},
 		{"../../etc", "pid", "", true},
 		{"notanumber", "", "", true},
+		{"12345", "paht", "", true},
+		{"12345", "unknown", "", true},
 	}
 	for _, tt := range tests {
 		got, err := resolveNSPath(tt.nsArg, tt.netnsType)

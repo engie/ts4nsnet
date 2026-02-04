@@ -82,13 +82,17 @@ func validateMTU(mtu int) error {
 // nsArg is returned as-is. Otherwise it is treated as a PID and resolved to
 // /proc/<pid>/ns/net.
 func resolveNSPath(nsArg, netnsType string) (string, error) {
-	if netnsType == "path" {
+	switch netnsType {
+	case "path":
 		return nsArg, nil
+	case "pid", "":
+		if _, err := strconv.Atoi(nsArg); err != nil {
+			return "", fmt.Errorf("invalid PID %q: %w", nsArg, err)
+		}
+		return "/proc/" + nsArg + "/ns/net", nil
+	default:
+		return "", fmt.Errorf("unknown --netns-type %q (expected \"path\" or \"pid\")", netnsType)
 	}
-	if _, err := strconv.Atoi(nsArg); err != nil {
-		return "", fmt.Errorf("invalid PID %q: %w", nsArg, err)
-	}
-	return "/proc/" + nsArg + "/ns/net", nil
 }
 
 func main() {
