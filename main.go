@@ -74,6 +74,19 @@ func main() {
 			// slirp4netns replacement. It checks for "slirp4netns" in the output.
 			fmt.Println("slirp4netns (ts4nsnet - tailscale container networking)")
 			fmt.Println("Usage: ts4nsnet [OPTIONS] NSPATH TUNNAME")
+			fmt.Println()
+			fmt.Println("Options:")
+			fmt.Println("  -c                  configure interface")
+			fmt.Println("  -r FD               ready fd")
+			fmt.Println("  -e FD               exit fd")
+			fmt.Println("  --mtu MTU           MTU (default 1500)")
+			fmt.Println("  --netns-type TYPE   namespace type (default path)")
+			fmt.Println("  --cidr CIDR         CIDR (ignored)")
+			fmt.Println("  --disable-host-loopback  disable host loopback (ignored)")
+			fmt.Println("  --enable-sandbox    enable sandbox (ignored)")
+			fmt.Println("  --enable-seccomp    enable seccomp (ignored)")
+			fmt.Println("  --enable-ipv6       enable IPv6 (ignored, always enabled)")
+			fmt.Println("  --api-socket PATH   API socket (ignored)")
 			os.Exit(0)
 		}
 	}
