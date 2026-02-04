@@ -315,7 +315,7 @@ func addAddr4(name string, addr netip.Addr) error {
 	ifaLen := 8 // sizeof(struct ifaddrmsg)
 	rtaLen := 4 + 4 // rta_hdr (4) + IPv4 addr (4) = 8, naturally 4-byte aligned
 
-	totalLen := hdrLen + ifaLen + rtaLen
+	totalLen := hdrLen + ifaLen + 2*rtaLen // IFA_LOCAL + IFA_ADDRESS
 	buf := make([]byte, totalLen)
 	e := nativeEndian()
 
@@ -332,10 +332,19 @@ func addAddr4(name string, addr netip.Addr) error {
 	buf[off+3] = unix.RT_SCOPE_UNIVERSE
 	e.PutUint32(buf[off+4:off+8], uint32(ifindex))
 
+	ip := addr.As4()
+
+	// IFA_LOCAL
 	off += ifaLen
 	e.PutUint16(buf[off:off+2], uint16(rtaLen))
 	e.PutUint16(buf[off+2:off+4], unix.IFA_LOCAL)
-	ip := addr.As4()
+	copy(buf[off+4:off+8], ip[:])
+
+	// IFA_ADDRESS — for point-to-point TUN interfaces, some kernel versions
+	// require both IFA_LOCAL and IFA_ADDRESS to be set explicitly.
+	off += rtaLen
+	e.PutUint16(buf[off:off+2], uint16(rtaLen))
+	e.PutUint16(buf[off+2:off+4], unix.IFA_ADDRESS)
 	copy(buf[off+4:off+8], ip[:])
 
 	return netlinkRequest(unix.NETLINK_ROUTE, buf)
@@ -355,7 +364,7 @@ func addAddr6(name string, addr netip.Addr) error {
 	ifaLen := 8
 	rtaLen := 4 + 16 // rta_hdr (4) + IPv6 addr (16) = 20, naturally 4-byte aligned
 
-	totalLen := hdrLen + ifaLen + rtaLen
+	totalLen := hdrLen + ifaLen + 2*rtaLen // IFA_LOCAL + IFA_ADDRESS
 	buf := make([]byte, totalLen)
 	e := nativeEndian()
 
@@ -372,10 +381,18 @@ func addAddr6(name string, addr netip.Addr) error {
 	buf[off+3] = unix.RT_SCOPE_UNIVERSE
 	e.PutUint32(buf[off+4:off+8], uint32(ifindex))
 
+	ip := addr.As16()
+
+	// IFA_LOCAL
 	off += ifaLen
 	e.PutUint16(buf[off:off+2], uint16(rtaLen))
 	e.PutUint16(buf[off+2:off+4], unix.IFA_LOCAL)
-	ip := addr.As16()
+	copy(buf[off+4:off+20], ip[:])
+
+	// IFA_ADDRESS
+	off += rtaLen
+	e.PutUint16(buf[off:off+2], uint16(rtaLen))
+	e.PutUint16(buf[off+2:off+4], unix.IFA_ADDRESS)
 	copy(buf[off+4:off+20], ip[:])
 
 	return netlinkRequest(unix.NETLINK_ROUTE, buf)
