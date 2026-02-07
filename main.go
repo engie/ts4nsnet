@@ -254,6 +254,24 @@ func run() error {
 		log.Printf("interface %s configured", tunName)
 	}
 
+	// Verify DNS readiness before signaling to podman. srv.Up() waits
+	// for ipn.Running which includes NetMap delivery, but we confirm
+	// DNS is configured to catch any regressions early.
+	// See: https://github.com/tailscale/tailscale/issues/1889
+	lc, err := srv.LocalClient()
+	if err != nil {
+		return fmt.Errorf("getting local client: %v", err)
+	}
+	st, err := lc.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("getting status: %v", err)
+	}
+	if st.CurrentTailnet != nil && st.CurrentTailnet.MagicDNSSuffix != "" {
+		log.Printf("DNS ready (MagicDNS suffix: %q)", st.CurrentTailnet.MagicDNSSuffix)
+	} else {
+		log.Printf("warning: MagicDNS not detected; container DNS may not resolve tailnet names")
+	}
+
 	// Signal readiness to podman.
 	if *readyFD >= 0 {
 		f := os.NewFile(uintptr(*readyFD), "ready-fd")
