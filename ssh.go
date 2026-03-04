@@ -33,11 +33,14 @@ import (
 type sshServer struct {
 	tsnetSrv *tsnet.Server
 	hostKey  gossh.Signer
-	nsPath   string // network namespace path for PID resolution
+	nsPath   string   // network namespace path for PID resolution
+	allow    []string // allowed login names (empty = allow all)
 }
 
 // newSSHServer creates an SSH server that will listen on the tsnet interface.
-func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string) (*sshServer, error) {
+// If allow is non-empty, only peers whose UserProfile.LoginName matches an
+// entry are permitted to open sessions.
+func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string, allow []string) (*sshServer, error) {
 	hostKey, err := loadOrGenerateHostKey(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("host key: %w", err)
@@ -47,7 +50,33 @@ func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string) (*sshServer
 		tsnetSrv: srv,
 		hostKey:  hostKey,
 		nsPath:   nsPath,
+		allow:    allow,
 	}, nil
+}
+
+// parseSSHAllow splits a comma-separated allowlist into trimmed, non-empty
+// login names.
+func parseSSHAllow(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// isAllowed reports whether the given login name is permitted by the
+// allowlist. If the allowlist contains "*", all tailnet peers are allowed.
+// An empty allowlist denies all peers.
+func (s *sshServer) isAllowed(loginName string) bool {
+	for _, a := range s.allow {
+		if a == "*" || a == loginName {
+			return true
+		}
+	}
+	return false
 }
 
 // containerPID resolves the container init PID at call time (not cached).
@@ -111,6 +140,12 @@ func (s *sshServer) handleConn(ctx context.Context, nc net.Conn) {
 	}
 	peerLogin := who.UserProfile.LoginName
 	peerNode := who.Node.Name
+
+	if !s.isAllowed(peerLogin) {
+		log.Printf("SSH: rejected %s (%s): not in allowlist", peerLogin, peerNode)
+		return
+	}
+
 	log.Printf("SSH session from %s (%s)", peerLogin, peerNode)
 
 	// Discard global requests (keepalives, etc).

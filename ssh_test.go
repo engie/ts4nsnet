@@ -203,6 +203,60 @@ func TestSSHPayloadParsing(t *testing.T) {
 	})
 }
 
+func TestParseSSHAllow(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"alice@example.com", []string{"alice@example.com"}},
+		{"alice@example.com,bob@example.com", []string{"alice@example.com", "bob@example.com"}},
+		{" alice@example.com , bob@example.com ", []string{"alice@example.com", "bob@example.com"}},
+		{"alice@example.com,,bob@example.com", []string{"alice@example.com", "bob@example.com"}},
+		{",,,", nil},
+	}
+	for _, tt := range tests {
+		got := parseSSHAllow(tt.input)
+		if len(got) == 0 && len(tt.want) == 0 {
+			continue
+		}
+		if len(got) != len(tt.want) {
+			t.Errorf("parseSSHAllow(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("parseSSHAllow(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestSSHAllowlist(t *testing.T) {
+	tests := []struct {
+		name  string
+		allow []string
+		login string
+		want  bool
+	}{
+		{"empty denies all", nil, "anyone@example.com", false},
+		{"match", []string{"alice@example.com"}, "alice@example.com", true},
+		{"no match", []string{"alice@example.com"}, "bob@example.com", false},
+		{"multiple entries match second", []string{"alice@example.com", "bob@example.com"}, "bob@example.com", true},
+		{"multiple entries no match", []string{"alice@example.com", "bob@example.com"}, "eve@example.com", false},
+		{"case sensitive", []string{"Alice@example.com"}, "alice@example.com", false},
+		{"wildcard allows all", []string{"*"}, "anyone@example.com", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &sshServer{allow: tt.allow}
+			if got := s.isAllowed(tt.login); got != tt.want {
+				t.Errorf("isAllowed(%q) = %v, want %v", tt.login, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- Tier 2: Integration test (no root, fake control + chanTUN) ---
 
 func TestSSHServerConnects(t *testing.T) {
@@ -246,15 +300,10 @@ func TestSSHServerConnects(t *testing.T) {
 
 	// Start SSH server on node 1.
 	stateDir := t.TempDir()
-	sshSrv := &sshServer{
-		tsnetSrv: srv1,
-		nsPath:   "/proc/1/ns/net", // won't nsenter in this test
-	}
-	hostKey, err := loadOrGenerateHostKey(stateDir)
+	sshSrv, err := newSSHServer(srv1, "/proc/1/ns/net", stateDir, []string{"*"})
 	if err != nil {
-		t.Fatalf("loadOrGenerateHostKey: %v", err)
+		t.Fatalf("newSSHServer: %v", err)
 	}
-	sshSrv.hostKey = hostKey
 
 	sshCtx, sshCancel := context.WithCancel(ctx)
 	defer sshCancel()

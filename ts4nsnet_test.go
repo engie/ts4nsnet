@@ -128,6 +128,26 @@ func TestParseEnvConfig(t *testing.T) {
 		t.Error("SSH = true, want false when TS_SSH is empty")
 	}
 
+	// TS_SSH_ALLOW parses into SSHAllow.
+	t.Setenv("TS_SSH_ALLOW", "alice@example.com,bob@example.com")
+	cfg, err = parseEnvConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SSHAllow) != 2 || cfg.SSHAllow[0] != "alice@example.com" || cfg.SSHAllow[1] != "bob@example.com" {
+		t.Errorf("SSHAllow = %v, want [alice@example.com bob@example.com]", cfg.SSHAllow)
+	}
+
+	// TS_SSH_ALLOW empty means no allowlist.
+	t.Setenv("TS_SSH_ALLOW", "")
+	cfg, err = parseEnvConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SSHAllow) != 0 {
+		t.Errorf("SSHAllow = %v, want empty", cfg.SSHAllow)
+	}
+
 	// StateDir defaults to empty when not set.
 	t.Setenv("TS_STATE_DIR", "")
 	cfg, err = parseEnvConfig()
