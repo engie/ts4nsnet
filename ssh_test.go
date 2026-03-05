@@ -36,9 +36,9 @@ func TestContainerPIDFromNSPath(t *testing.T) {
 			want:   1,
 		},
 		{
-			name:    "named netns without override falls through to proc scan",
+			name:    "named netns without override errors if path missing",
 			nsPath:  "/run/netns/mycontainer",
-			wantErr: false, // findPIDInNetNS finds a process in our own netns
+			wantErr: true,
 		},
 		{
 			name:   "named netns with TS_SSH_PID",
@@ -65,15 +65,19 @@ func TestContainerPIDFromNSPath(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "empty path falls through to proc scan",
+			name:    "empty path errors",
 			nsPath:  "",
-			wantErr: false, // findPIDInNetNS finds a process in our own netns
+			wantErr: true,
 		},
 		{
 			name:   "TS_SSH_PID takes precedence over proc path",
 			nsPath: "/proc/999/ns/net",
 			sshPID: "42",
 			want:   42,
+		},
+		{
+			name:   "real ns path via proc self finds a process",
+			nsPath: "/proc/self/ns/net",
 		},
 	}
 	for _, tt := range tests {

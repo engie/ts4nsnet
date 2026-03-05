@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/creack/pty"
 	gossh "golang.org/x/crypto/ssh"
@@ -461,7 +462,7 @@ func loadOrGenerateHostKey(stateDir string) (gossh.Signer, error) {
 //  1. TS_SSH_PID env var (explicit override)
 //  2. /proc/PID/ns/net path format (PID embedded in path)
 //  3. Named netns (/run/user/UID/netns/NAME or /run/netns/NAME) — scan /proc
-//     to find a process whose net namespace matches.
+//     to find a process whose net namespace matches by device+inode.
 func containerPIDFromNSPath(nsPath string) (int, error) {
 	// Try TS_SSH_PID override first.
 	if pidStr := os.Getenv("TS_SSH_PID"); pidStr != "" {
@@ -475,6 +476,10 @@ func containerPIDFromNSPath(nsPath string) (int, error) {
 		return pid, nil
 	}
 
+	if nsPath == "" {
+		return 0, fmt.Errorf("empty namespace path")
+	}
+
 	// Parse /proc/PID/ns/net format.
 	if strings.HasPrefix(nsPath, "/proc/") {
 		parts := strings.SplitN(nsPath, "/", 5) // ["", "proc", "PID", "ns", "net"]
@@ -486,7 +491,7 @@ func containerPIDFromNSPath(nsPath string) (int, error) {
 		}
 	}
 
-	// Named netns — find a process in this namespace by comparing inode.
+	// Named netns — find a process in this namespace by comparing device+inode.
 	pid, err := findPIDInNetNS(nsPath)
 	if err != nil {
 		return 0, fmt.Errorf("cannot resolve PID for netns %q: %w (set TS_SSH_PID as fallback)", nsPath, err)
@@ -495,18 +500,22 @@ func containerPIDFromNSPath(nsPath string) (int, error) {
 }
 
 // findPIDInNetNS scans /proc to find the lowest-numbered process whose
-// network namespace matches ours (by readlink symlink target). Named netns
-// bind mounts have different inodes than /proc/PID/ns/net, so we compare
-// against /proc/self/ns/net instead of stat'ing the named path.
-// Returns the lowest PID that isn't our own process — typically the
-// container init.
+// network namespace matches nsPath by stat(2) device+inode comparison.
+// This is the standard kernel mechanism for namespace identity — two
+// namespace files refer to the same namespace iff they share the same
+// (device, inode) pair. Used by lsns(1) and ip-netns(8).
 func findPIDInNetNS(nsPath string) (int, error) {
-	selfNS, err := os.Readlink("/proc/self/ns/net")
+	targetFi, err := os.Stat(nsPath)
 	if err != nil {
-		return 0, fmt.Errorf("readlink /proc/self/ns/net: %w", err)
+		return 0, fmt.Errorf("stat %s: %w", nsPath, err)
+	}
+	targetStat, ok := targetFi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("cannot get stat_t for %s", nsPath)
 	}
 
 	myPID := os.Getpid()
+	bestPID := 0
 
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -522,14 +531,23 @@ func findPIDInNetNS(nsPath string) (int, error) {
 			continue
 		}
 
-		link, err := os.Readlink("/proc/" + entry.Name() + "/ns/net")
+		fi, err := os.Stat(fmt.Sprintf("/proc/%d/ns/net", pid))
 		if err != nil {
 			continue
 		}
-		if link == selfNS {
-			return pid, nil
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
+		if st.Dev == targetStat.Dev && st.Ino == targetStat.Ino {
+			if bestPID == 0 || pid < bestPID {
+				bestPID = pid
+			}
 		}
 	}
 
-	return 0, fmt.Errorf("no process found in netns %s", nsPath)
+	if bestPID == 0 {
+		return 0, fmt.Errorf("no process found in netns %s", nsPath)
+	}
+	return bestPID, nil
 }
