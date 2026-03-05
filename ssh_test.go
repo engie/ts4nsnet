@@ -261,6 +261,123 @@ func TestSSHAllowlist(t *testing.T) {
 	}
 }
 
+func TestAcceptEnvPair(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"TERM", true},
+		{"LANG", true},
+		{"LC_ALL", true},
+		{"LC_CTYPE", true},
+		{"LC_MESSAGES", true},
+		{"PATH", false},
+		{"HOME", false},
+		{"LD_PRELOAD", false},
+		{"LD_LIBRARY_PATH", false},
+		{"BASH_ENV", false},
+		{"ENV", false},
+		{"PYTHONPATH", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := acceptEnvPair(tt.name); got != tt.want {
+				t.Errorf("acceptEnvPair(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchAcceptEnvPattern(t *testing.T) {
+	tests := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		{"TERM", "TERM", true},
+		{"TERM", "LANG", false},
+		{"GIT_*", "GIT_AUTHOR_NAME", true},
+		{"GIT_*", "GIT_", true},
+		{"GIT_*", "GIT", false},
+		{"*", "ANYTHING", true},
+		{"*", "", true},
+		{"MY_?", "MY_A", true},
+		{"MY_?", "MY_AB", false},
+		{"MY_?", "MY_", false},
+		{"FOO_*_BAR", "FOO_X_BAR", true},
+		{"FOO_*_BAR", "FOO_XYZ_BAR", true},
+		{"FOO_*_BAR", "FOO__BAR", true},
+		{"FOO_*_BAR", "FOO_BAR", false},
+		{"**", "X", true},
+		{"", "", true},
+		{"", "X", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.pattern+"/"+tt.name, func(t *testing.T) {
+			if got := matchAcceptEnvPattern(tt.pattern, tt.name); got != tt.want {
+				t.Errorf("matchAcceptEnvPattern(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseAcceptEnv(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"GIT_*", []string{"GIT_*"}},
+		{"GIT_*,MY_VAR", []string{"GIT_*", "MY_VAR"}},
+		{" GIT_* , MY_VAR ", []string{"GIT_*", "MY_VAR"}},
+		{",,,", nil},
+	}
+	for _, tt := range tests {
+		got := parseAcceptEnv(tt.input)
+		if len(got) == 0 && len(tt.want) == 0 {
+			continue
+		}
+		if len(got) != len(tt.want) {
+			t.Errorf("parseAcceptEnv(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("parseAcceptEnv(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestIsAllowedEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		acceptEnv []string
+		envName   string
+		want      bool
+	}{
+		{"baseline TERM", nil, "TERM", true},
+		{"baseline LANG", nil, "LANG", true},
+		{"baseline LC_ALL", nil, "LC_ALL", true},
+		{"blocked LD_PRELOAD", nil, "LD_PRELOAD", false},
+		{"blocked PATH", nil, "PATH", false},
+		{"pattern match", []string{"GIT_*"}, "GIT_AUTHOR_NAME", true},
+		{"pattern no match", []string{"GIT_*"}, "PATH", false},
+		{"pattern plus baseline", []string{"GIT_*"}, "TERM", true},
+		{"exact pattern", []string{"MY_VAR"}, "MY_VAR", true},
+		{"exact pattern miss", []string{"MY_VAR"}, "MY_OTHER", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &sshServer{acceptEnv: tt.acceptEnv}
+			if got := s.isAllowedEnv(tt.envName); got != tt.want {
+				t.Errorf("isAllowedEnv(%q) = %v, want %v", tt.envName, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- Tier 2: Integration test (no root, fake control + chanTUN) ---
 
 func TestSSHServerConnects(t *testing.T) {
@@ -304,7 +421,7 @@ func TestSSHServerConnects(t *testing.T) {
 
 	// Start SSH server on node 1.
 	stateDir := t.TempDir()
-	sshSrv, err := newSSHServer(srv1, "/proc/1/ns/net", stateDir, []string{"*"})
+	sshSrv, err := newSSHServer(srv1, "/proc/1/ns/net", stateDir, []string{"*"}, nil)
 	if err != nil {
 		t.Fatalf("newSSHServer: %v", err)
 	}

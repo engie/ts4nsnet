@@ -38,7 +38,8 @@ type envConfig struct {
 	ExitNode   string
 	ControlURL string
 	StateDir   string
-	SSHAllow   []string // login names allowed to SSH; non-empty enables SSH
+	SSHAllow     []string // login names allowed to SSH; non-empty enables SSH
+	SSHAcceptEnv []string // additional env var patterns to accept over SSH
 }
 
 // validHostname matches a Tailscale hostname: lowercase alphanumeric and
@@ -68,6 +69,9 @@ func parseEnvConfig() (envConfig, error) {
 	}
 	if allow := os.Getenv("TS_SSH_ALLOW"); allow != "" {
 		c.SSHAllow = parseSSHAllow(allow)
+	}
+	if acceptEnv := os.Getenv("TS_SSH_ACCEPT_ENV"); acceptEnv != "" {
+		c.SSHAcceptEnv = parseAcceptEnv(acceptEnv)
 	}
 	return c, nil
 }
@@ -143,6 +147,7 @@ func main() {
 			fmt.Println("  TS_CONTROL_URL      Custom control server URL")
 			fmt.Println("  TS_STATE_DIR        Persistent state directory")
 			fmt.Println("  TS_SSH_ALLOW        Comma-separated allowlist of login names (* for all); enables SSH")
+			fmt.Println("  TS_SSH_ACCEPT_ENV   Comma-separated env var patterns to accept over SSH (*,? wildcards)")
 			fmt.Println("  TS_SSH_PID          Override container PID for nsenter")
 			os.Exit(0)
 		}
@@ -301,7 +306,7 @@ func run() error {
 
 	// Start SSH server if allowlist is configured.
 	if len(cfg.SSHAllow) > 0 {
-		sshSrv, err := newSSHServer(srv, nsPath, stateDir, cfg.SSHAllow)
+		sshSrv, err := newSSHServer(srv, nsPath, stateDir, cfg.SSHAllow, cfg.SSHAcceptEnv)
 		if err != nil {
 			log.Printf("SSH server disabled: %v", err)
 		} else {

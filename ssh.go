@@ -32,26 +32,28 @@ import (
 // sshServer runs an SSH server on the tsnet interface, allowing tailnet
 // peers to open shells inside the container via nsenter.
 type sshServer struct {
-	tsnetSrv *tsnet.Server
-	hostKey  gossh.Signer
-	nsPath   string   // network namespace path for PID resolution
-	allow    []string // allowed login names (empty = allow all)
+	tsnetSrv  *tsnet.Server
+	hostKey   gossh.Signer
+	nsPath    string   // network namespace path for PID resolution
+	allow     []string // allowed login names (empty = allow all)
+	acceptEnv []string // additional env var patterns to accept (from TS_SSH_ACCEPT_ENV)
 }
 
 // newSSHServer creates an SSH server that will listen on the tsnet interface.
 // If allow is non-empty, only peers whose UserProfile.LoginName matches an
 // entry are permitted to open sessions.
-func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string, allow []string) (*sshServer, error) {
+func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string, allow []string, acceptEnv []string) (*sshServer, error) {
 	hostKey, err := loadOrGenerateHostKey(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("host key: %w", err)
 	}
 
 	return &sshServer{
-		tsnetSrv: srv,
-		hostKey:  hostKey,
-		nsPath:   nsPath,
-		allow:    allow,
+		tsnetSrv:  srv,
+		hostKey:   hostKey,
+		nsPath:    nsPath,
+		allow:     allow,
+		acceptEnv: acceptEnv,
 	}, nil
 }
 
@@ -74,6 +76,79 @@ func parseSSHAllow(s string) []string {
 func (s *sshServer) isAllowed(loginName string) bool {
 	for _, a := range s.allow {
 		if a == "*" || a == loginName {
+			return true
+		}
+	}
+	return false
+}
+
+// acceptEnvPair reports whether the env var name is unconditionally safe
+// to pass through to the container shell. Matches OpenSSH's default
+// AcceptEnv and Tailscale's hardcoded acceptEnvPair: TERM, LANG, LC_*.
+func acceptEnvPair(name string) bool {
+	return name == "TERM" || name == "LANG" || strings.HasPrefix(name, "LC_")
+}
+
+// matchAcceptEnvPattern matches a name against a pattern containing
+// '*' (zero or more chars) and '?' (exactly one char) wildcards.
+// Mirrors Tailscale's matchAcceptEnvPattern algorithm.
+func matchAcceptEnvPattern(pattern, name string) bool {
+	for len(pattern) > 0 {
+		switch pattern[0] {
+		case '*':
+			// Skip repeated asterisks.
+			for len(pattern) > 0 && pattern[0] == '*' {
+				pattern = pattern[1:]
+			}
+			if len(pattern) == 0 {
+				return true // trailing * matches everything
+			}
+			// Try matching rest of pattern at every position.
+			for i := 0; i <= len(name); i++ {
+				if matchAcceptEnvPattern(pattern, name[i:]) {
+					return true
+				}
+			}
+			return false
+		case '?':
+			if len(name) == 0 {
+				return false
+			}
+			pattern = pattern[1:]
+			name = name[1:]
+		default:
+			if len(name) == 0 || pattern[0] != name[0] {
+				return false
+			}
+			pattern = pattern[1:]
+			name = name[1:]
+		}
+	}
+	return len(name) == 0
+}
+
+// parseAcceptEnv splits a comma-separated list of env var patterns
+// (with optional * and ? wildcards) into trimmed, non-empty entries.
+func parseAcceptEnv(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// isAllowedEnv reports whether the given env var name should be passed
+// through to the container. A name is allowed if it matches the
+// hardcoded baseline (TERM, LANG, LC_*) or any pattern in acceptEnv.
+func (s *sshServer) isAllowedEnv(name string) bool {
+	if acceptEnvPair(name) {
+		return true
+	}
+	for _, pattern := range s.acceptEnv {
+		if matchAcceptEnvPattern(pattern, name) {
 			return true
 		}
 	}
@@ -207,6 +282,10 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 		case "env":
 			e, err := parseEnvReq(req.Payload)
 			if err != nil {
+				req.Reply(false, nil)
+				continue
+			}
+			if !s.isAllowedEnv(e.Name) {
 				req.Reply(false, nil)
 				continue
 			}
