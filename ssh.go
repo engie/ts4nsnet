@@ -33,28 +33,30 @@ import (
 // sshServer runs an SSH server on the tsnet interface, allowing tailnet
 // peers to open shells inside the container via nsenter.
 type sshServer struct {
-	tsnetSrv  *tsnet.Server
-	hostKey   gossh.Signer
-	nsPath    string            // network namespace path for PID resolution
-	allow     map[string]string // tailnet login → container user (empty = deny all)
-	acceptEnv []string          // additional env var patterns to accept (from TS_SSH_ACCEPT_ENV)
+	tsnetSrv    *tsnet.Server
+	hostKey     gossh.Signer
+	nsPath      string            // network namespace path for PID resolution
+	pidfilePath string            // path to podman's --pidfile (from TS_PIDFILE)
+	allow       map[string]string // tailnet login → container user (empty = deny all)
+	acceptEnv   []string          // additional env var patterns to accept (from TS_SSH_ACCEPT_ENV)
 }
 
 // newSSHServer creates an SSH server that will listen on the tsnet interface.
 // allow maps tailnet login names to container usernames. Only peers whose
 // UserProfile.LoginName appears in the map (or "*" wildcard) are permitted.
-func newSSHServer(srv *tsnet.Server, nsPath string, stateDir string, allow map[string]string, acceptEnv []string) (*sshServer, error) {
+func newSSHServer(srv *tsnet.Server, nsPath string, pidfilePath string, stateDir string, allow map[string]string, acceptEnv []string) (*sshServer, error) {
 	hostKey, err := loadOrGenerateHostKey(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("host key: %w", err)
 	}
 
 	return &sshServer{
-		tsnetSrv:  srv,
-		hostKey:   hostKey,
-		nsPath:    nsPath,
-		allow:     allow,
-		acceptEnv: acceptEnv,
+		tsnetSrv:    srv,
+		hostKey:     hostKey,
+		nsPath:      nsPath,
+		pidfilePath: pidfilePath,
+		allow:       allow,
+		acceptEnv:   acceptEnv,
 	}, nil
 }
 
@@ -239,10 +241,67 @@ func baseEnvForUser(entry passwdEntry) []string {
 	}
 }
 
-// containerPID resolves the container init PID at call time (not cached).
-// This avoids stale PIDs from transient setup processes.
+// readPidfile reads a PID from a file written by podman's --pidfile flag.
+func readPidfile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("reading pidfile: %w", err)
+	}
+	pidStr := strings.TrimSpace(string(data))
+	if pidStr == "" {
+		return 0, fmt.Errorf("pidfile %s is empty", path)
+	}
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("pidfile %s: invalid PID %q: %w", path, pidStr, err)
+	}
+	if pid <= 0 {
+		return 0, fmt.Errorf("pidfile %s: PID must be positive, got %d", path, pid)
+	}
+	return pid, nil
+}
+
+// validatePIDNetNS checks that the given PID is in the expected network
+// namespace by comparing stat(2) device+inode of /proc/<pid>/ns/net and
+// nsPath. This guards against PID reuse after container restart.
+func validatePIDNetNS(pid int, nsPath string) error {
+	pidNS := fmt.Sprintf("/proc/%d/ns/net", pid)
+	fi1, err := os.Stat(pidNS)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", pidNS, err)
+	}
+	fi2, err := os.Stat(nsPath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", nsPath, err)
+	}
+	st1, ok := fi1.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot get stat_t for %s", pidNS)
+	}
+	st2, ok := fi2.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot get stat_t for %s", nsPath)
+	}
+	if st1.Dev != st2.Dev || st1.Ino != st2.Ino {
+		return fmt.Errorf("PID %d is not in expected netns (PID reuse detected)", pid)
+	}
+	return nil
+}
+
+// containerPID resolves the container init PID from the pidfile and
+// validates it is in the expected network namespace.
 func (s *sshServer) containerPID() (int, error) {
-	return containerPIDFromNSPath(s.nsPath)
+	if s.pidfilePath == "" {
+		return 0, fmt.Errorf("TS_PIDFILE not set; required for SSH container PID resolution")
+	}
+	pid, err := readPidfile(s.pidfilePath)
+	if err != nil {
+		return 0, err
+	}
+	if err := validatePIDNetNS(pid, s.nsPath); err != nil {
+		return 0, err
+	}
+	return pid, nil
 }
 
 // run starts the SSH server, listening on :22 of the tsnet interface.
@@ -667,98 +726,3 @@ func loadOrGenerateHostKey(stateDir string) (gossh.Signer, error) {
 	return signer, nil
 }
 
-// containerPIDFromNSPath resolves the container init PID for nsenter.
-//
-// Resolution order:
-//  1. TS_SSH_PID env var (explicit override)
-//  2. /proc/PID/ns/net path format (PID embedded in path)
-//  3. Named netns (/run/user/UID/netns/NAME or /run/netns/NAME) — scan /proc
-//     to find a process whose net namespace matches by device+inode.
-func containerPIDFromNSPath(nsPath string) (int, error) {
-	// Try TS_SSH_PID override first.
-	if pidStr := os.Getenv("TS_SSH_PID"); pidStr != "" {
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil {
-			return 0, fmt.Errorf("invalid TS_SSH_PID %q: %w", pidStr, err)
-		}
-		if pid <= 0 {
-			return 0, fmt.Errorf("TS_SSH_PID must be positive, got %d", pid)
-		}
-		return pid, nil
-	}
-
-	if nsPath == "" {
-		return 0, fmt.Errorf("empty namespace path")
-	}
-
-	// Parse /proc/PID/ns/net format.
-	if strings.HasPrefix(nsPath, "/proc/") {
-		parts := strings.SplitN(nsPath, "/", 5) // ["", "proc", "PID", "ns", "net"]
-		if len(parts) >= 4 {
-			pid, err := strconv.Atoi(parts[2])
-			if err == nil && pid > 0 {
-				return pid, nil
-			}
-		}
-	}
-
-	// Named netns — find a process in this namespace by comparing device+inode.
-	pid, err := findPIDInNetNS(nsPath)
-	if err != nil {
-		return 0, fmt.Errorf("cannot resolve PID for netns %q: %w (set TS_SSH_PID as fallback)", nsPath, err)
-	}
-	return pid, nil
-}
-
-// findPIDInNetNS scans /proc to find the lowest-numbered process whose
-// network namespace matches nsPath by stat(2) device+inode comparison.
-// This is the standard kernel mechanism for namespace identity — two
-// namespace files refer to the same namespace iff they share the same
-// (device, inode) pair. Used by lsns(1) and ip-netns(8).
-func findPIDInNetNS(nsPath string) (int, error) {
-	targetFi, err := os.Stat(nsPath)
-	if err != nil {
-		return 0, fmt.Errorf("stat %s: %w", nsPath, err)
-	}
-	targetStat, ok := targetFi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, fmt.Errorf("cannot get stat_t for %s", nsPath)
-	}
-
-	myPID := os.Getpid()
-	bestPID := 0
-
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return 0, fmt.Errorf("reading /proc: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 || pid == myPID {
-			continue
-		}
-
-		fi, err := os.Stat(fmt.Sprintf("/proc/%d/ns/net", pid))
-		if err != nil {
-			continue
-		}
-		st, ok := fi.Sys().(*syscall.Stat_t)
-		if !ok {
-			continue
-		}
-		if st.Dev == targetStat.Dev && st.Ino == targetStat.Ino {
-			if bestPID == 0 || pid < bestPID {
-				bestPID = pid
-			}
-		}
-	}
-
-	if bestPID == 0 {
-		return 0, fmt.Errorf("no process found in netns %s", nsPath)
-	}
-	return bestPID, nil
-}

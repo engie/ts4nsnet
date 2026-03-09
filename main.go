@@ -33,13 +33,14 @@ import (
 
 // envConfig holds configuration read from environment variables.
 type envConfig struct {
-	AuthKey    string
-	Hostname   string
-	ExitNode   string
-	ControlURL string
-	StateDir   string
+	AuthKey      string
+	Hostname     string
+	ExitNode     string
+	ControlURL   string
+	StateDir     string
+	PidfilePath  string            // path to podman's --pidfile for container PID resolution
 	SSHAllow     map[string]string // tailnet login → container user; non-empty enables SSH
-	SSHAcceptEnv []string // additional env var patterns to accept over SSH
+	SSHAcceptEnv []string          // additional env var patterns to accept over SSH
 }
 
 // validHostname matches a Tailscale hostname: lowercase alphanumeric and
@@ -73,6 +74,10 @@ func parseEnvConfig() (envConfig, error) {
 			return c, err
 		}
 		c.SSHAllow = parsed
+	}
+	c.PidfilePath = os.Getenv("TS_PIDFILE")
+	if len(c.SSHAllow) > 0 && c.PidfilePath == "" {
+		return c, fmt.Errorf("TS_PIDFILE is required when SSH is enabled (TS_SSH_ALLOW is set)")
 	}
 	if acceptEnv := os.Getenv("TS_SSH_ACCEPT_ENV"); acceptEnv != "" {
 		c.SSHAcceptEnv = parseAcceptEnv(acceptEnv)
@@ -152,7 +157,7 @@ func main() {
 			fmt.Println("  TS_STATE_DIR        Persistent state directory")
 			fmt.Println("  TS_SSH_ALLOW        Comma-separated identity:user pairs (e.g. alice@example.com:root,*:dave); enables SSH")
 			fmt.Println("  TS_SSH_ACCEPT_ENV   Comma-separated env var patterns to accept over SSH (*,? wildcards)")
-			fmt.Println("  TS_SSH_PID          Override container PID for nsenter")
+			fmt.Println("  TS_PIDFILE          Path to podman's --pidfile for container PID resolution")
 			os.Exit(0)
 		}
 	}
@@ -310,7 +315,7 @@ func run() error {
 
 	// Start SSH server if allowlist is configured.
 	if len(cfg.SSHAllow) > 0 {
-		sshSrv, err := newSSHServer(srv, nsPath, stateDir, cfg.SSHAllow, cfg.SSHAcceptEnv)
+		sshSrv, err := newSSHServer(srv, nsPath, cfg.PidfilePath, stateDir, cfg.SSHAllow, cfg.SSHAcceptEnv)
 		if err != nil {
 			log.Printf("SSH server disabled: %v", err)
 		} else {

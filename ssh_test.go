@@ -7,6 +7,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,86 +21,118 @@ import (
 
 // --- Tier 1: Unit tests (no root, no network) ---
 
-func TestContainerPIDFromNSPath(t *testing.T) {
+func TestReadPidfile(t *testing.T) {
 	tests := []struct {
 		name    string
-		nsPath  string
-		sshPID  string // TS_SSH_PID env override
+		content string
+		create  bool // whether to create the file
 		want    int
 		wantErr bool
 	}{
-		{
-			name:   "proc path",
-			nsPath: "/proc/12345/ns/net",
-			want:   12345,
-		},
-		{
-			name:   "proc path single digit",
-			nsPath: "/proc/1/ns/net",
-			want:   1,
-		},
-		{
-			name:    "named netns without override errors if path missing",
-			nsPath:  "/run/netns/mycontainer",
-			wantErr: true,
-		},
-		{
-			name:   "named netns with TS_SSH_PID",
-			nsPath: "/run/netns/mycontainer",
-			sshPID: "42",
-			want:   42,
-		},
-		{
-			name:    "TS_SSH_PID invalid",
-			nsPath:  "/run/netns/mycontainer",
-			sshPID:  "notanumber",
-			wantErr: true,
-		},
-		{
-			name:    "TS_SSH_PID zero",
-			nsPath:  "/run/netns/mycontainer",
-			sshPID:  "0",
-			wantErr: true,
-		},
-		{
-			name:    "TS_SSH_PID negative",
-			nsPath:  "/run/netns/mycontainer",
-			sshPID:  "-1",
-			wantErr: true,
-		},
-		{
-			name:    "empty path errors",
-			nsPath:  "",
-			wantErr: true,
-		},
-		{
-			name:   "TS_SSH_PID takes precedence over proc path",
-			nsPath: "/proc/999/ns/net",
-			sshPID: "42",
-			want:   42,
-		},
-		{
-			name:   "real ns path via proc self finds a process",
-			nsPath: "/proc/self/ns/net",
-		},
+		{"valid PID", "42", true, 42, false},
+		{"trailing newline", "42\n", true, 42, false},
+		{"whitespace", "  42  \n", true, 42, false},
+		{"empty file", "", true, 0, true},
+		{"non-numeric", "notapid", true, 0, true},
+		{"zero", "0", true, 0, true},
+		{"negative", "-1", true, 0, true},
+		{"missing file", "", false, 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.sshPID != "" {
-				t.Setenv("TS_SSH_PID", tt.sshPID)
+			var path string
+			if tt.create {
+				path = filepath.Join(t.TempDir(), "pidfile")
+				if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+					t.Fatal(err)
+				}
 			} else {
-				t.Setenv("TS_SSH_PID", "")
+				path = filepath.Join(t.TempDir(), "nonexistent")
 			}
-			got, err := containerPIDFromNSPath(tt.nsPath)
+			got, err := readPidfile(path)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("containerPIDFromNSPath(%q) error = %v, wantErr %v", tt.nsPath, err, tt.wantErr)
+				t.Errorf("readPidfile() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if tt.want != 0 && got != tt.want {
-				t.Errorf("containerPIDFromNSPath(%q) = %d, want %d", tt.nsPath, got, tt.want)
+			if got != tt.want {
+				t.Errorf("readPidfile() = %d, want %d", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestValidatePIDNetNS(t *testing.T) {
+	myPID := os.Getpid()
+	myNS := fmt.Sprintf("/proc/%d/ns/net", myPID)
+
+	t.Run("own PID matches own netns", func(t *testing.T) {
+		if err := validatePIDNetNS(myPID, myNS); err != nil {
+			t.Errorf("validatePIDNetNS(self, self) = %v, want nil", err)
+		}
+	})
+
+	t.Run("non-existent PID", func(t *testing.T) {
+		if err := validatePIDNetNS(999999999, myNS); err == nil {
+			t.Error("validatePIDNetNS(bogus, self) = nil, want error")
+		}
+	})
+
+	t.Run("non-existent nsPath", func(t *testing.T) {
+		if err := validatePIDNetNS(myPID, "/run/netns/nonexistent"); err == nil {
+			t.Error("validatePIDNetNS(self, bogus) = nil, want error")
+		}
+	})
+}
+
+func TestContainerPID(t *testing.T) {
+	myPID := os.Getpid()
+	myNS := fmt.Sprintf("/proc/%d/ns/net", myPID)
+
+	t.Run("pidfile with matching netns", func(t *testing.T) {
+		pidfile := filepath.Join(t.TempDir(), "test.pid")
+		if err := os.WriteFile(pidfile, []byte(fmt.Sprintf("%d\n", myPID)), 0644); err != nil {
+			t.Fatal(err)
+		}
+		s := &sshServer{nsPath: myNS, pidfilePath: pidfile}
+		got, err := s.containerPID()
+		if err != nil {
+			t.Fatalf("containerPID() error = %v", err)
+		}
+		if got != myPID {
+			t.Errorf("containerPID() = %d, want %d", got, myPID)
+		}
+	})
+
+	t.Run("missing pidfilePath errors", func(t *testing.T) {
+		s := &sshServer{nsPath: myNS}
+		_, err := s.containerPID()
+		if err == nil {
+			t.Error("containerPID() = nil, want error for missing pidfilePath")
+		}
+	})
+
+	t.Run("missing pidfile errors", func(t *testing.T) {
+		s := &sshServer{nsPath: myNS, pidfilePath: "/tmp/nonexistent-pidfile"}
+		_, err := s.containerPID()
+		if err == nil {
+			t.Error("containerPID() = nil, want error for missing pidfile")
+		}
+	})
+
+	t.Run("netns mismatch errors", func(t *testing.T) {
+		// PID 1 (init) is almost certainly in a different netns than us
+		pidfile := filepath.Join(t.TempDir(), "test.pid")
+		if err := os.WriteFile(pidfile, []byte("1\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		s := &sshServer{nsPath: myNS, pidfilePath: pidfile}
+		_, err := s.containerPID()
+		// This may error with permission denied (reading /proc/1/ns/net)
+		// or netns mismatch — either way it should error.
+		if err == nil {
+			t.Error("containerPID() = nil, want error for netns mismatch")
+		}
+	})
 }
 
 func TestSSHPayloadParsing(t *testing.T) {
@@ -563,7 +598,15 @@ func TestSSHServerConnects(t *testing.T) {
 
 	// Start SSH server on node 1.
 	stateDir := t.TempDir()
-	sshSrv, err := newSSHServer(srv1, "/proc/1/ns/net", stateDir, map[string]string{"*": "root"}, nil)
+	// Write a pidfile for the test — PID 1 won't be validated since we
+	// can't stat /proc/1/ns/net reliably, but the SSH server just needs
+	// a valid pidfilePath to construct; containerPID() isn't called in
+	// this test (nsenter would fail anyway without a real container).
+	pidfile := filepath.Join(stateDir, "test.pid")
+	if err := os.WriteFile(pidfile, []byte("1\n"), 0644); err != nil {
+		t.Fatalf("writing pidfile: %v", err)
+	}
+	sshSrv, err := newSSHServer(srv1, "/proc/1/ns/net", pidfile, stateDir, map[string]string{"*": "root"}, nil)
 	if err != nil {
 		t.Fatalf("newSSHServer: %v", err)
 	}
