@@ -562,6 +562,11 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 		args = append(args, "-S", strconv.Itoa(entry.UID), "-G", strconv.Itoa(entry.GID))
 	}
 	args = append(args, "--")
+	// Pass environment via /usr/bin/env inside the namespace, not via
+	// cmd.Env on the host side. This prevents client-controlled env vars
+	// (e.g. LD_PRELOAD) from affecting nsenter's own dynamic linker.
+	args = append(args, "/usr/bin/env", "-i")
+	args = append(args, envVars...)
 	if cmdArgs == nil {
 		// Use sh to cd to $HOME before exec'ing the login shell.
 		// nsenter's --wd resolves on the host filesystem, which fails
@@ -572,7 +577,7 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 	}
 
 	cmd := exec.CommandContext(ctx, "nsenter", args...)
-	cmd.Env = envVars
+	cmd.Env = []string{}
 
 	if winSize != nil {
 		// Allocate a PTY.
