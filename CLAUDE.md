@@ -37,11 +37,25 @@ CI runs only Tier 1 tests, `go vet`, and build.
 
 ## Architecture
 
-Three source files, single package `main`:
+Four source files, single package `main`:
 
 - **main.go** — Entry point, CLI flag parsing (slirp4netns-compatible), env config (`TS_AUTHKEY`, `TS_HOSTNAME`, `TS_EXIT_NODE`, `TS_CONTROL_URL`, `TS_STATE_DIR`), tsnet server lifecycle, ready/exit fd coordination with podman, signal handling.
+- **ssh.go** — SSH server on the tsnet interface. Identifies peers via WhoIs, checks the allowlist (`TS_SSH_ALLOW`), discovers containers via pidfile scanning, and runs commands inside containers via `nsenter`.
 - **netns.go** — Network namespace operations. `createTUNInNamespace()` uses a sacrificial goroutine pattern (LockOSThread + Setns, thread never returned) to create a TUN in the container's namespace. Interface configuration uses raw netlink/ioctl syscalls (no external dependencies).
 - **tun.go** — `fdTUN` struct implementing the `tun.Device` interface, wrapping the file descriptor from namespace creation for use by tsnet.
+
+### SSH container selection
+
+The SSH username field selects which container to enter. `discoverContainers()` scans `dirname(TS_PIDFILE)` for `*.pid` files, reads each PID, and filters to those sharing the network namespace (via `validatePIDNetNS`). The SSH username must match a pidfile basename (without `.pid`).
+
+**Single container:** `ssh nginx-demo@nginx-demo.tailnet` — the username `nginx-demo` matches `nginx-demo.pid` in the pidfile directory. There's only one container in the netns.
+
+**Pod (multiple containers):** In a podman pod, all containers share a network namespace. Each container writes a pidfile to the same `%t` directory (e.g. `/run/user/<uid>/webapp-web.pid`, `/run/user/<uid>/webapp-api.pid`). The SSH username selects the target:
+- `ssh webapp-web@webapp.tailnet` → enters the web container
+- `ssh webapp-api@webapp.tailnet` → enters the api container
+- `ssh wrong@webapp.tailnet` → error listing available containers
+
+The allowlist (`TS_SSH_ALLOW`) maps tailnet identity to the OS user inside the container (e.g. `alice@example.com:root`). Container selection (SSH username) and OS user (allowlist) are independent.
 
 ### Key pattern: Sacrificial goroutine
 
