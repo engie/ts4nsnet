@@ -432,10 +432,6 @@ func (s *sshServer) handleConn(ctx context.Context, nc net.Conn) {
 // window-change, env, shell, and exec. Commands are run via nsenter into
 // the container's namespaces as localUser.
 func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-chan *gossh.Request, localUser string, containerName string) {
-	// Session-scoped context: cancelled when this handler returns or when
-	// drainReqs detects the SSH channel closing during command execution.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	defer ch.Close()
 
 	var (
@@ -502,8 +498,6 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 				return
 			}
 			env := s.buildEnv(entry, term, envVars)
-			// Drain remaining requests in background; cancel ctx on channel close.
-			go drainReqs(reqs, cancel)
 			exitCode := s.execInContainer(ctx, ch, pid, nil, entry, env, winSize, &ptmx)
 			sendExitStatus(ch, exitCode)
 			return
@@ -531,8 +525,6 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 			}
 			env := s.buildEnv(entry, term, envVars)
 			cmdArgs := []string{"/bin/sh", "-c", `cd "$HOME" 2>/dev/null; ` + e.Command}
-			// Drain remaining requests in background; cancel ctx on channel close.
-			go drainReqs(reqs, cancel)
 			exitCode := s.execInContainer(ctx, ch, pid, cmdArgs, entry, env, winSize, &ptmx)
 			sendExitStatus(ch, exitCode)
 			return
@@ -543,19 +535,6 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 			}
 		}
 	}
-}
-
-// drainReqs consumes remaining SSH channel requests (e.g. window-change)
-// and calls onClose when the channel closes (peer disconnect). This allows
-// the session context to be cancelled when the SSH client disconnects while
-// a command is running.
-func drainReqs(reqs <-chan *gossh.Request, onClose context.CancelFunc) {
-	for req := range reqs {
-		if req.WantReply {
-			req.Reply(false, nil)
-		}
-	}
-	onClose()
 }
 
 // buildEnv constructs the full environment for the container process.
@@ -633,8 +612,6 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 	}
 
 	// No PTY — pipe stdin/stdout/stderr directly.
-	// Use a process group so we can kill all children on disconnect.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = ch
 	cmd.Stdout = ch
 	cmd.Stderr = ch.Stderr()
@@ -643,19 +620,7 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 		fmt.Fprintf(ch, "failed to start command: %v\n", err)
 		return 1
 	}
-	// Kill the entire process group when the context is cancelled
-	// (SSH disconnect detected by drainReqs, or daemon shutdown).
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		case <-done:
-		}
-	}()
-	err := cmd.Wait()
-	close(done)
-	return exitCodeFromErr(err)
+	return exitCodeFromErr(cmd.Wait())
 }
 
 // exitCodeFromErr extracts the exit code from an exec error.
