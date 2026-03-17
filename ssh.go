@@ -205,21 +205,23 @@ func parsePasswdUser(r io.Reader, username string) (passwdEntry, bool) {
 	return passwdEntry{}, false
 }
 
-// lookupUserInContainer reads the container's /etc/passwd (via /proc/<pid>/root)
-// and returns the passwd entry for the given username. Falls back to sensible
-// defaults for root; returns an error for other users not found in passwd.
+// lookupUserInContainer reads the container's /etc/passwd by entering its
+// mount namespace via nsenter, avoiding symlink traversal attacks that are
+// possible when reading via /proc/<pid>/root/etc/passwd from the host.
+// Falls back to sensible defaults for root; returns an error for other users
+// not found in passwd.
 func lookupUserInContainer(pid int, username string) (passwdEntry, error) {
-	path := fmt.Sprintf("/proc/%d/root/etc/passwd", pid)
-	f, err := os.Open(path)
+	cmd := exec.Command("nsenter", "-t", strconv.Itoa(pid), "-m", "--", "cat", "/etc/passwd")
+	cmd.Env = []string{}
+	out, err := cmd.Output()
 	if err != nil {
 		if username == "root" {
-			log.Printf("SSH: cannot read container passwd (%s): %v; using defaults for root", path, err)
+			log.Printf("SSH: cannot read container passwd (nsenter pid %d): %v; using defaults for root", pid, err)
 			return passwdEntry{Username: "root", UID: 0, GID: 0, Home: "/root", Shell: "/bin/sh"}, nil
 		}
 		return passwdEntry{}, fmt.Errorf("cannot read container passwd: %w", err)
 	}
-	defer f.Close()
-	entry, found := parsePasswdUser(f, username)
+	entry, found := parsePasswdUser(strings.NewReader(string(out)), username)
 	if !found {
 		if username == "root" {
 			return passwdEntry{Username: "root", UID: 0, GID: 0, Home: "/root", Shell: "/bin/sh"}, nil
