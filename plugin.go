@@ -180,6 +180,9 @@ func cmdSetup() error {
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		return writePluginError("decoding setup input: %v", err)
 	}
+	if !validContainerID.MatchString(input.ContainerID) {
+		return writePluginError("invalid container ID: %q", input.ContainerID)
+	}
 
 	cfg, err := buildDaemonConfig(nsPath, &input)
 	if err != nil {
@@ -268,6 +271,9 @@ func cmdTeardown() error {
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		return writePluginError("decoding teardown input: %v", err)
 	}
+	if !validContainerID.MatchString(input.ContainerID) {
+		return writePluginError("invalid container ID: %q", input.ContainerID)
+	}
 
 	stateDir := filepath.Join(stateBaseDir(), input.ContainerID)
 	killDaemon(stateDir)
@@ -275,6 +281,9 @@ func cmdTeardown() error {
 
 	return nil
 }
+
+// validContainerID matches standard container IDs: 12-64 lowercase hex characters.
+var validContainerID = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
 // --- Helper functions ---
 
