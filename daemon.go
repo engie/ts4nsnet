@@ -43,6 +43,10 @@ func cmdDaemon() error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Remove config.json immediately after reading — it contains the auth
+	// key in plaintext and is never re-read.
+	os.Remove(configPath)
+
 	return runDaemon(&cfg, *stateDir)
 }
 
