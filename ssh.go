@@ -573,7 +573,9 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 		// Use sh to cd to $HOME before exec'ing the login shell.
 		// nsenter's --wd resolves on the host filesystem, which fails
 		// in rootless podman where the host user can't access /root.
-		args = append(args, "/bin/sh", "-c", `cd "$HOME" 2>/dev/null; exec `+entry.Shell+` -l`)
+		// The shell path is passed as $0 to avoid injection via crafted
+		// /etc/passwd shell fields.
+		args = append(args, "/bin/sh", "-c", `cd "$HOME" 2>/dev/null; exec "$0" -l`, entry.Shell)
 	} else {
 		args = append(args, cmdArgs...)
 	}
