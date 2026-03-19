@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -82,6 +83,69 @@ func TestFdTUNCloseEvents(t *testing.T) {
 	if ok {
 		t.Fatal("expected events channel to be closed")
 	}
+}
+
+// --- Daemon PID identity tests ---
+
+func TestProcessStarttime(t *testing.T) {
+	// Our own PID should have a readable starttime.
+	st, err := processStarttime(os.Getpid())
+	if err != nil {
+		t.Fatalf("processStarttime(self) error = %v", err)
+	}
+	if st == "" {
+		t.Error("processStarttime(self) returned empty string")
+	}
+	// Starttime should be a numeric value.
+	for _, c := range st {
+		if c < '0' || c > '9' {
+			t.Errorf("processStarttime(self) = %q, contains non-digit", st)
+			break
+		}
+	}
+}
+
+func TestDaemonPIDRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	myPID := os.Getpid()
+
+	t.Run("write and read back", func(t *testing.T) {
+		if err := writeDaemonPID(dir, myPID); err != nil {
+			t.Fatalf("writeDaemonPID() error = %v", err)
+		}
+		info, err := readDaemonPID(dir)
+		if err != nil {
+			t.Fatalf("readDaemonPID() error = %v", err)
+		}
+		if info.PID != myPID {
+			t.Errorf("PID = %d, want %d", info.PID, myPID)
+		}
+		if info.Starttime == "" {
+			t.Error("Starttime is empty")
+		}
+	})
+
+	t.Run("reads legacy bare PID format", func(t *testing.T) {
+		legacyDir := t.TempDir()
+		os.WriteFile(filepath.Join(legacyDir, "daemon.pid"), []byte("42\n"), 0600)
+		info, err := readDaemonPID(legacyDir)
+		if err != nil {
+			t.Fatalf("readDaemonPID(legacy) error = %v", err)
+		}
+		if info.PID != 42 {
+			t.Errorf("PID = %d, want 42", info.PID)
+		}
+		if info.Starttime != "" {
+			t.Errorf("Starttime = %q, want empty for legacy format", info.Starttime)
+		}
+	})
+
+	t.Run("missing file errors", func(t *testing.T) {
+		_, err := readDaemonPID(t.TempDir())
+		if err == nil {
+			t.Error("readDaemonPID(missing) = nil, want error")
+		}
+	})
 }
 
 // --- Plugin JSON tests ---

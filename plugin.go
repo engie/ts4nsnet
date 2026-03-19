@@ -228,10 +228,11 @@ func cmdSetup() error {
 		return writePluginError("starting daemon: %v", err)
 	}
 
-	// Write daemon PID for teardown.
+	// Write daemon PID + starttime for teardown identity verification.
 	daemonPID := cmd.Process.Pid
-	pidPath := filepath.Join(stateDir, "daemon.pid")
-	os.WriteFile(pidPath, []byte(strconv.Itoa(daemonPID)), 0600)
+	if err := writeDaemonPID(stateDir, daemonPID); err != nil {
+		log.Printf("setup: warning: failed to write daemon.pid: %v", err)
+	}
 	log.Printf("setup: daemon pid=%d, polling for ready.json", daemonPID)
 
 	// Release the child so we don't zombie-wait on it.
@@ -429,28 +430,105 @@ func buildStatusBlock(ready *DaemonReady) StatusBlock {
 	return status
 }
 
-// killDaemon reads the daemon PID from the state dir and sends SIGTERM.
-func killDaemon(stateDir string) {
-	pidPath := filepath.Join(stateDir, "daemon.pid")
-	data, err := os.ReadFile(pidPath)
+// daemonPIDInfo holds a daemon's PID and process starttime (field 22 from
+// /proc/<pid>/stat, in clock ticks since boot). Together they form a unique
+// process identifier that is immune to PID recycling.
+type daemonPIDInfo struct {
+	PID       int    `json:"pid"`
+	Starttime string `json:"starttime"`
+}
+
+// processStarttime reads the starttime field (field 22, 0-indexed) from
+// /proc/<pid>/stat. The comm field (field 2) may contain spaces and
+// parentheses, so we find the last ')' to skip it reliably.
+func processStarttime(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return // no pidfile, nothing to kill
+		return "", err
 	}
+	// Fields after comm (which is in parens and may contain spaces).
+	s := string(data)
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 {
+		return "", fmt.Errorf("malformed /proc/%d/stat", pid)
+	}
+	// Fields after ')' are space-separated, starting at field 3 (state).
+	// Starttime is field 22, so it's at index 22-3 = 19 in the remaining fields.
+	fields := strings.Fields(s[idx+1:])
+	if len(fields) < 20 {
+		return "", fmt.Errorf("/proc/%d/stat: too few fields", pid)
+	}
+	return fields[19], nil
+}
+
+// writeDaemonPID writes the daemon's PID and starttime to daemon.pid in JSON.
+func writeDaemonPID(stateDir string, pid int) error {
+	starttime, err := processStarttime(pid)
+	if err != nil {
+		// Fall back to PID-only if we can't read starttime.
+		starttime = ""
+		log.Printf("setup: warning: cannot read starttime for PID %d: %v", pid, err)
+	}
+	info := daemonPIDInfo{PID: pid, Starttime: starttime}
+	data, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(stateDir, "daemon.pid"), data, 0600)
+}
+
+// readDaemonPID reads the daemon PID info from daemon.pid in the state dir.
+func readDaemonPID(stateDir string) (daemonPIDInfo, error) {
+	data, err := os.ReadFile(filepath.Join(stateDir, "daemon.pid"))
+	if err != nil {
+		return daemonPIDInfo{}, err
+	}
+	// Try JSON format first (new).
+	var info daemonPIDInfo
+	if err := json.Unmarshal(data, &info); err == nil && info.PID > 0 {
+		return info, nil
+	}
+	// Fall back to bare PID (old format, for compatibility during rollout).
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 0 {
-		return
+		return daemonPIDInfo{}, fmt.Errorf("invalid daemon.pid content")
 	}
+	return daemonPIDInfo{PID: pid}, nil
+}
+
+// killDaemon reads the daemon PID info from the state dir, verifies the
+// process identity via starttime to guard against PID reuse, and sends
+// SIGTERM (then SIGKILL if needed).
+func killDaemon(stateDir string) {
+	info, err := readDaemonPID(stateDir)
+	if err != nil {
+		return // no pidfile or unreadable, nothing to kill
+	}
+
+	// Verify process identity before signaling.
+	if info.Starttime != "" {
+		current, err := processStarttime(info.PID)
+		if err != nil {
+			return // process already gone
+		}
+		if current != info.Starttime {
+			log.Printf("teardown: PID %d has different starttime (%s vs %s), skipping kill (PID was recycled)",
+				info.PID, current, info.Starttime)
+			return
+		}
+	}
+
 	// Send SIGTERM. Ignore errors (process may already be dead).
-	syscall.Kill(pid, syscall.SIGTERM)
+	syscall.Kill(info.PID, syscall.SIGTERM)
 	// Brief wait for clean shutdown.
 	for i := 0; i < 10; i++ {
-		if err := syscall.Kill(pid, 0); err != nil {
+		if err := syscall.Kill(info.PID, 0); err != nil {
 			return // process gone
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	// Force kill if still alive.
-	syscall.Kill(pid, syscall.SIGKILL)
+	syscall.Kill(info.PID, syscall.SIGKILL)
 }
 
 // writePluginError writes a JSON error to stdout (netavark plugin protocol)
