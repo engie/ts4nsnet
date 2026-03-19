@@ -206,17 +206,20 @@ func parsePasswdUser(r io.Reader, username string) (passwdEntry, bool) {
 }
 
 // lookupUserInContainer reads the container's /etc/passwd by entering its
-// mount namespace via nsenter, avoiding symlink traversal attacks that are
-// possible when reading via /proc/<pid>/root/etc/passwd from the host.
-// Falls back to sensible defaults for root; returns an error for other users
-// not found in passwd.
-func lookupUserInContainer(pid int, username string) (passwdEntry, error) {
-	cmd := exec.Command("nsenter", "-t", strconv.Itoa(pid), "-m", "--", "cat", "/etc/passwd")
+// mount namespace via the pinned FDs in ref, avoiding symlink traversal
+// attacks that are possible when reading via /proc/<pid>/root/etc/passwd
+// from the host. Falls back to sensible defaults for root; returns an error
+// for other users not found in passwd.
+func lookupUserInContainer(ref *containerRef, username string) (passwdEntry, error) {
+	nsArgs, extraFiles := ref.mountNsenterArgs(nil)
+	args := append(nsArgs, "--", "cat", "/etc/passwd")
+	cmd := exec.Command("nsenter", args...)
 	cmd.Env = []string{}
+	cmd.ExtraFiles = extraFiles
 	out, err := cmd.Output()
 	if err != nil {
 		if username == "root" {
-			log.Printf("SSH: cannot read container passwd (nsenter pid %d): %v; using defaults for root", pid, err)
+			log.Printf("SSH: cannot read container passwd (nsenter ref pid %d): %v; using defaults for root", ref.pid, err)
 			return passwdEntry{Username: "root", UID: 0, GID: 0, Home: "/root", Shell: "/bin/sh"}, nil
 		}
 		return passwdEntry{}, fmt.Errorf("cannot read container passwd: %w", err)
@@ -290,10 +293,101 @@ func validatePIDNetNS(pid int, nsPath string) error {
 	return nil
 }
 
+// containerRef holds pinned namespace file descriptors for a container process.
+// By holding open FDs to the namespace files, we prevent the TOCTOU race
+// between PID validation and nsenter execution — the FDs are unforgeable
+// kernel references that remain valid even if the PID is recycled.
+type containerRef struct {
+	pid   int        // original PID (used only for logging)
+	nsFDs []*os.File // open FDs to /proc/<pid>/ns/{net,mnt,uts,ipc,pid,cgroup}
+}
+
+// nsenter namespace flag names, in the order we open and pass them.
+var nsTypes = []string{"net", "mnt", "uts", "ipc", "pid", "cgroup"}
+
+// pinNamespaces opens and pins all namespace FDs for a PID, verifying that
+// its network namespace matches nsPath. Returns a containerRef that must
+// be closed by the caller.
+func pinNamespaces(pid int, nsPath string) (*containerRef, error) {
+	ref := &containerRef{pid: pid}
+	success := false
+	defer func() {
+		if !success {
+			ref.Close()
+		}
+	}()
+
+	for _, ns := range nsTypes {
+		path := fmt.Sprintf("/proc/%d/ns/%s", pid, ns)
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", path, err)
+		}
+		ref.nsFDs = append(ref.nsFDs, f)
+	}
+
+	// Verify the pinned net ns FD (first in the list) matches nsPath.
+	var fdStat, nsStat syscall.Stat_t
+	if err := syscall.Fstat(int(ref.nsFDs[0].Fd()), &fdStat); err != nil {
+		return nil, fmt.Errorf("fstat net ns fd: %w", err)
+	}
+	if err := syscall.Stat(nsPath, &nsStat); err != nil {
+		return nil, fmt.Errorf("stat %s: %w", nsPath, err)
+	}
+	if fdStat.Dev != nsStat.Dev || fdStat.Ino != nsStat.Ino {
+		return nil, fmt.Errorf("PID %d is not in expected netns (PID reuse detected)", pid)
+	}
+
+	success = true
+	return ref, nil
+}
+
+// nsenterArgs returns nsenter flags that reference pinned FDs via
+// /proc/self/fd/ paths in the child process. Since exec.Command closes
+// all FDs except stdin/stdout/stderr and ExtraFiles, the FDs must be
+// passed via cmd.ExtraFiles. Child FDs start at 3 + len(existing ExtraFiles).
+// Returns (args, extraFiles) to be set on the exec.Cmd.
+func (r *containerRef) nsenterArgs(existingExtra []*os.File) ([]string, []*os.File) {
+	flagForNS := map[string]string{
+		"net":    "--net",
+		"mnt":    "--mount",
+		"uts":    "--uts",
+		"ipc":    "--ipc",
+		"pid":    "--pid",
+		"cgroup": "--cgroup",
+	}
+	extra := append([]*os.File(nil), existingExtra...)
+	args := make([]string, 0, len(nsTypes))
+	for i, ns := range nsTypes {
+		childFD := 3 + len(extra) // stdin=0, stdout=1, stderr=2, then ExtraFiles
+		extra = append(extra, r.nsFDs[i])
+		args = append(args, fmt.Sprintf("%s=/proc/self/fd/%d", flagForNS[ns], childFD))
+	}
+	return args, extra
+}
+
+// mountNsenterArgs returns nsenter flags for entering only the mount
+// namespace via the pinned FD. Returns (args, extraFiles).
+func (r *containerRef) mountNsenterArgs(existingExtra []*os.File) ([]string, []*os.File) {
+	extra := append([]*os.File(nil), existingExtra...)
+	childFD := 3 + len(extra)
+	extra = append(extra, r.nsFDs[1]) // mnt is at index 1 in nsTypes
+	return []string{fmt.Sprintf("--mount=/proc/self/fd/%d", childFD)}, extra
+}
+
+// Close releases all pinned namespace FDs.
+func (r *containerRef) Close() {
+	for _, f := range r.nsFDs {
+		f.Close()
+	}
+	r.nsFDs = nil
+}
+
 // discoverContainers scans the directory containing pidfilePath for *.pid
-// files, reads each PID, and returns those sharing our network namespace.
-// The map keys are pidfile basenames without the .pid extension.
-func (s *sshServer) discoverContainers() (map[string]int, error) {
+// files, reads each PID, pins their namespace FDs, and returns those sharing
+// our network namespace. The map keys are pidfile basenames without the .pid
+// extension. The caller must Close() all returned containerRefs.
+func (s *sshServer) discoverContainers() (map[string]*containerRef, error) {
 	if s.pidfilePath == "" {
 		return nil, fmt.Errorf("TS_PIDFILE not set; required for SSH container PID resolution")
 	}
@@ -302,7 +396,7 @@ func (s *sshServer) discoverContainers() (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading pidfile directory %s: %w", dir, err)
 	}
-	result := make(map[string]int)
+	result := make(map[string]*containerRef)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
 			continue
@@ -312,37 +406,45 @@ func (s *sshServer) discoverContainers() (map[string]int, error) {
 		if err != nil {
 			continue // stale or unreadable pidfile
 		}
-		if err := validatePIDNetNS(pid, s.nsPath); err != nil {
-			continue // different netns, not part of this pod
+		ref, err := pinNamespaces(pid, s.nsPath)
+		if err != nil {
+			continue // different netns, dead process, or not part of this pod
 		}
 		name := strings.TrimSuffix(e.Name(), ".pid")
-		result[name] = pid
+		result[name] = ref
 	}
 	return result, nil
 }
 
-// containerPID resolves the container init PID for the given container name
-// (SSH username). It discovers all containers sharing our network namespace
-// by scanning pidfiles, then looks up the requested name.
-func (s *sshServer) containerPID(name string) (int, error) {
+// resolveContainer looks up a container by name (SSH username), returning
+// a containerRef with pinned namespace FDs. The caller must Close() the ref.
+// All non-matching containerRefs from discovery are closed before returning.
+func (s *sshServer) resolveContainer(name string) (*containerRef, error) {
 	if s.pidfilePath == "" {
-		return 0, fmt.Errorf("TS_PIDFILE not set; required for SSH container PID resolution")
+		return nil, fmt.Errorf("TS_PIDFILE not set; required for SSH container PID resolution")
 	}
 	containers, err := s.discoverContainers()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if len(containers) == 0 {
-		return 0, fmt.Errorf("no containers found sharing network namespace")
+		return nil, fmt.Errorf("no containers found sharing network namespace")
 	}
-	if pid, ok := containers[name]; ok {
-		return pid, nil
+	// Close all refs except the one we return.
+	var matched *containerRef
+	var available []string
+	for k, ref := range containers {
+		if k == name {
+			matched = ref
+		} else {
+			ref.Close()
+			available = append(available, k)
+		}
 	}
-	available := make([]string, 0, len(containers))
-	for k := range containers {
-		available = append(available, k)
+	if matched != nil {
+		return matched, nil
 	}
-	return 0, fmt.Errorf("container %q not found; available: %s", name, strings.Join(available, ", "))
+	return nil, fmt.Errorf("container %q not found; available: %s", name, strings.Join(available, ", "))
 }
 
 // run starts the SSH server, listening on :22 of the tsnet interface.
@@ -483,14 +585,15 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 
 		case "shell":
 			req.Reply(true, nil)
-			pid, err := s.containerPID(containerName)
+			ref, err := s.resolveContainer(containerName)
 			if err != nil {
-				log.Printf("SSH: failed to resolve container PID: %v", err)
-				fmt.Fprintf(ch, "failed to resolve container PID: %v\r\n", err)
+				log.Printf("SSH: failed to resolve container: %v", err)
+				fmt.Fprintf(ch, "failed to resolve container: %v\r\n", err)
 				sendExitStatus(ch, 1)
 				return
 			}
-			entry, err := lookupUserInContainer(pid, localUser)
+			defer ref.Close()
+			entry, err := lookupUserInContainer(ref, localUser)
 			if err != nil {
 				log.Printf("SSH: failed to resolve user %q: %v", localUser, err)
 				fmt.Fprintf(ch, "failed to resolve user %q: %v\r\n", localUser, err)
@@ -498,7 +601,7 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 				return
 			}
 			env := s.buildEnv(entry, term, envVars)
-			exitCode := s.execInContainer(ctx, ch, pid, nil, entry, env, winSize, &ptmx)
+			exitCode := s.execInContainer(ctx, ch, ref, nil, entry, env, winSize, &ptmx)
 			sendExitStatus(ch, exitCode)
 			return
 
@@ -509,14 +612,15 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 				continue
 			}
 			req.Reply(true, nil)
-			pid, err := s.containerPID(containerName)
+			ref, err := s.resolveContainer(containerName)
 			if err != nil {
-				log.Printf("SSH: failed to resolve container PID: %v", err)
-				fmt.Fprintf(ch, "failed to resolve container PID: %v\r\n", err)
+				log.Printf("SSH: failed to resolve container: %v", err)
+				fmt.Fprintf(ch, "failed to resolve container: %v\r\n", err)
 				sendExitStatus(ch, 1)
 				return
 			}
-			entry, err := lookupUserInContainer(pid, localUser)
+			defer ref.Close()
+			entry, err := lookupUserInContainer(ref, localUser)
 			if err != nil {
 				log.Printf("SSH: failed to resolve user %q: %v", localUser, err)
 				fmt.Fprintf(ch, "failed to resolve user %q: %v\r\n", localUser, err)
@@ -525,7 +629,7 @@ func (s *sshServer) handleSession(ctx context.Context, ch gossh.Channel, reqs <-
 			}
 			env := s.buildEnv(entry, term, envVars)
 			cmdArgs := []string{"/bin/sh", "-c", `cd "$HOME" 2>/dev/null; ` + e.Command}
-			exitCode := s.execInContainer(ctx, ch, pid, cmdArgs, entry, env, winSize, &ptmx)
+			exitCode := s.execInContainer(ctx, ch, ref, cmdArgs, entry, env, winSize, &ptmx)
 			sendExitStatus(ch, exitCode)
 			return
 
@@ -550,13 +654,12 @@ func (s *sshServer) buildEnv(entry passwdEntry, term string, clientEnv []string)
 }
 
 // execInContainer runs a command inside the container's namespaces via
-// nsenter. If cmdArgs is nil, it runs an interactive login shell using
-// the user's shell with -l. Returns the process exit code.
-func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid int, cmdArgs []string, entry passwdEntry, envVars []string, winSize *pty.Winsize, ptmx **os.File) int {
-	args := []string{
-		"-t", strconv.Itoa(pid),
-		"-m", "-u", "-i", "-n", "-p", "-C", "-F",
-	}
+// nsenter, using pinned namespace FDs from ref. If cmdArgs is nil, it runs
+// an interactive login shell using the user's shell with -l. Returns the
+// process exit code.
+func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, ref *containerRef, cmdArgs []string, entry passwdEntry, envVars []string, winSize *pty.Winsize, ptmx **os.File) int {
+	nsArgs, extraFiles := ref.nsenterArgs(nil)
+	args := append(nsArgs, "-F") // don't fork
 	// Only use setuid/setgid for non-root users. In rootless podman,
 	// we already enter as UID 0 inside the user namespace, and -S/-G
 	// would require CAP_SETUID/CAP_SETGID which we don't have.
@@ -582,6 +685,7 @@ func (s *sshServer) execInContainer(ctx context.Context, ch gossh.Channel, pid i
 
 	cmd := exec.CommandContext(ctx, "nsenter", args...)
 	cmd.Env = []string{}
+	cmd.ExtraFiles = extraFiles
 
 	if winSize != nil {
 		// Allocate a PTY.

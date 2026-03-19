@@ -84,7 +84,41 @@ func TestValidatePIDNetNS(t *testing.T) {
 	})
 }
 
-func TestContainerPID(t *testing.T) {
+func TestPinNamespaces(t *testing.T) {
+	myPID := os.Getpid()
+	myNS := fmt.Sprintf("/proc/%d/ns/net", myPID)
+
+	t.Run("pins own namespaces", func(t *testing.T) {
+		ref, err := pinNamespaces(myPID, myNS)
+		if err != nil {
+			t.Fatalf("pinNamespaces() error = %v", err)
+		}
+		defer ref.Close()
+		if ref.pid != myPID {
+			t.Errorf("ref.pid = %d, want %d", ref.pid, myPID)
+		}
+		if len(ref.nsFDs) != len(nsTypes) {
+			t.Errorf("got %d ns FDs, want %d", len(ref.nsFDs), len(nsTypes))
+		}
+	})
+
+	t.Run("non-existent PID", func(t *testing.T) {
+		_, err := pinNamespaces(999999999, myNS)
+		if err == nil {
+			t.Error("pinNamespaces(bogus) = nil, want error")
+		}
+	})
+
+	t.Run("netns mismatch", func(t *testing.T) {
+		// PID 1 is almost certainly in a different netns.
+		_, err := pinNamespaces(1, myNS)
+		if err == nil {
+			t.Error("pinNamespaces(1, self-ns) = nil, want error")
+		}
+	})
+}
+
+func TestResolveContainer(t *testing.T) {
 	myPID := os.Getpid()
 	myNS := fmt.Sprintf("/proc/%d/ns/net", myPID)
 
@@ -95,45 +129,42 @@ func TestContainerPID(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := &sshServer{nsPath: myNS, pidfilePath: pidfile}
-		got, err := s.containerPID("test")
+		ref, err := s.resolveContainer("test")
 		if err != nil {
-			t.Fatalf("containerPID() error = %v", err)
+			t.Fatalf("resolveContainer() error = %v", err)
 		}
-		if got != myPID {
-			t.Errorf("containerPID() = %d, want %d", got, myPID)
+		defer ref.Close()
+		if ref.pid != myPID {
+			t.Errorf("ref.pid = %d, want %d", ref.pid, myPID)
 		}
 	})
 
 	t.Run("missing pidfilePath errors", func(t *testing.T) {
 		s := &sshServer{nsPath: myNS}
-		_, err := s.containerPID("test")
+		_, err := s.resolveContainer("test")
 		if err == nil {
-			t.Error("containerPID() = nil, want error for missing pidfilePath")
+			t.Error("resolveContainer() = nil, want error for missing pidfilePath")
 		}
 	})
 
 	t.Run("missing pidfile errors", func(t *testing.T) {
 		s := &sshServer{nsPath: myNS, pidfilePath: "/tmp/nonexistent-pidfile/x.pid"}
-		_, err := s.containerPID("x")
+		_, err := s.resolveContainer("x")
 		if err == nil {
-			t.Error("containerPID() = nil, want error for missing pidfile directory")
+			t.Error("resolveContainer() = nil, want error for missing pidfile directory")
 		}
 	})
 
 	t.Run("netns mismatch errors", func(t *testing.T) {
-		// PID 1 (init) is almost certainly in a different netns than us
 		dir := t.TempDir()
 		pidfile := filepath.Join(dir, "test.pid")
 		if err := os.WriteFile(pidfile, []byte("1\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
 		s := &sshServer{nsPath: myNS, pidfilePath: pidfile}
-		_, err := s.containerPID("test")
-		// This may error with permission denied (reading /proc/1/ns/net)
-		// or netns mismatch — either way it should error (no containers found
-		// or container not found).
+		_, err := s.resolveContainer("test")
 		if err == nil {
-			t.Error("containerPID() = nil, want error for netns mismatch")
+			t.Error("resolveContainer() = nil, want error for netns mismatch")
 		}
 	})
 
@@ -144,9 +175,9 @@ func TestContainerPID(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := &sshServer{nsPath: myNS, pidfilePath: pidfile}
-		_, err := s.containerPID("api")
+		_, err := s.resolveContainer("api")
 		if err == nil {
-			t.Error("containerPID(api) = nil, want error for wrong name")
+			t.Error("resolveContainer(api) = nil, want error for wrong name")
 		}
 		if !strings.Contains(err.Error(), "not found") {
 			t.Errorf("error should mention 'not found', got: %v", err)
@@ -163,7 +194,6 @@ func TestDiscoverContainers(t *testing.T) {
 
 	t.Run("discovers multiple pidfiles in same netns", func(t *testing.T) {
 		dir := t.TempDir()
-		// Write two pidfiles pointing to our own PID (same netns).
 		for _, name := range []string{"web.pid", "api.pid"} {
 			path := filepath.Join(dir, name)
 			if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", myPID)), 0644); err != nil {
@@ -175,14 +205,19 @@ func TestDiscoverContainers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("discoverContainers() error = %v", err)
 		}
+		defer func() {
+			for _, ref := range got {
+				ref.Close()
+			}
+		}()
 		if len(got) != 2 {
 			t.Fatalf("discoverContainers() returned %d containers, want 2", len(got))
 		}
-		if got["web"] != myPID {
-			t.Errorf("web PID = %d, want %d", got["web"], myPID)
+		if got["web"] == nil || got["web"].pid != myPID {
+			t.Errorf("web ref.pid = %v, want %d", got["web"], myPID)
 		}
-		if got["api"] != myPID {
-			t.Errorf("api PID = %d, want %d", got["api"], myPID)
+		if got["api"] == nil || got["api"].pid != myPID {
+			t.Errorf("api ref.pid = %v, want %d", got["api"], myPID)
 		}
 	})
 
@@ -199,6 +234,11 @@ func TestDiscoverContainers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("discoverContainers() error = %v", err)
 		}
+		defer func() {
+			for _, ref := range got {
+				ref.Close()
+			}
+		}()
 		if len(got) != 1 {
 			t.Fatalf("discoverContainers() returned %d containers, want 1", len(got))
 		}
@@ -206,11 +246,9 @@ func TestDiscoverContainers(t *testing.T) {
 
 	t.Run("skips pidfiles with wrong netns", func(t *testing.T) {
 		dir := t.TempDir()
-		// Our PID (same netns).
 		if err := os.WriteFile(filepath.Join(dir, "web.pid"), []byte(fmt.Sprintf("%d\n", myPID)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		// PID 1 (different netns or unreadable).
 		if err := os.WriteFile(filepath.Join(dir, "other.pid"), []byte("1\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -219,6 +257,11 @@ func TestDiscoverContainers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("discoverContainers() error = %v", err)
 		}
+		defer func() {
+			for _, ref := range got {
+				ref.Close()
+			}
+		}()
 		if _, ok := got["other"]; ok {
 			t.Error("discoverContainers() should not include 'other' (wrong netns)")
 		}
