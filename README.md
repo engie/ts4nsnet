@@ -59,6 +59,142 @@ Config merges three layers (later overrides earlier):
 by default. Diagnostic logs may be uploaded to `log.tailscale.com` during
 runtime. This is standard Tailscale behavior.
 
+## Installation
+
+Install the plugin binary where netavark can find it, and tell podman where to
+look:
+
+```sh
+# Copy the binary
+sudo install -m 755 netavark-tailscale-plugin /usr/local/lib/netavark-plugins/
+
+# Tell netavark where to find plugins
+cat <<'EOF' | sudo tee /etc/containers/containers.conf
+[network]
+netavark_plugin_dirs = ["/usr/local/lib/netavark-plugins"]
+EOF
+```
+
+Create the podman network (once per host):
+
+```sh
+podman network create --driver netavark-tailscale-plugin tailscale
+```
+
+## Example deployment with rootless Podman
+
+This shows a complete setup using [quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+systemd units and [tailmint](https://github.com/engie/tailmint) for ephemeral
+auth key minting. Each container gets a fresh, single-use Tailscale auth key at
+startup and appears as its own node on the tailnet.
+
+### Prerequisites
+
+- A [Tailscale OAuth client](https://tailscale.com/kb/1215/oauth-clients) with
+  a tag (e.g. `tag:containers`) that the client is authorized to create devices
+  under
+- `tailmint` installed at `/usr/local/bin/tailmint`
+- OAuth credentials in `/etc/tailscale/oauth.env`:
+
+```env
+TS_API_CLIENT_ID=your-oauth-client-id
+TS_API_CLIENT_SECRET=tskey-client-...
+```
+
+- A sudoers rule so the container user can mint keys (replace `nginx-demo` with
+  your user):
+
+```
+nginx-demo ALL=(root) NOPASSWD: /usr/local/bin/tailmint -config /etc/tailscale/oauth.env -tag tag\:containers -hostname * -output /run/user/*/ts-authkeys/*.env
+```
+
+### Quadlet container file
+
+Place this at `~/.config/containers/systemd/nginx-demo.container`:
+
+```ini
+[Unit]
+Description=nginx on tailnet
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:latest
+ContainerName=nginx-demo
+Network=tailscale
+
+[Service]
+# Mint a fresh ephemeral auth key before each start
+ExecStartPre=mkdir -p %t/ts-authkeys
+ExecStartPre=sudo /usr/local/bin/tailmint -config /etc/tailscale/oauth.env -tag tag:containers -hostname %N -output %t/ts-authkeys/%N.env
+ExecStartPre=podman network create --ignore --driver netavark-tailscale-plugin tailscale
+
+# Load the minted key into the service environment
+EnvironmentFile=-%t/ts-authkeys/%N.env
+
+# TS_HOSTNAME and TS_AUTHKEY are read by netavark-tailscale-plugin on the
+# host side, so they go in [Service], not [Container]
+Environment=TS_HOSTNAME=%N
+
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=default.target
+```
+
+Start it:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user start nginx-demo
+```
+
+The container joins the tailnet as `nginx-demo` and is reachable from any device
+on the same tailnet.
+
+### Enabling SSH into the container
+
+To allow Tailscale SSH access into the running container, add these to
+`[Service]`:
+
+```ini
+Environment=TS_SSH_ALLOW=you@example.com:root
+Environment=TS_PIDFILE=%t/%N.pid
+```
+
+And add `--pidfile` to `[Container]`:
+
+```ini
+PodmanArgs=--pidfile %t/%N.pid
+```
+
+`TS_SSH_ALLOW` is a comma-separated list of `identity:user` pairs — the
+Tailscale identity (login name) allowed to connect, and the container user to
+run commands as. `TS_PIDFILE` tells the plugin where podman writes the container
+PID, which is needed to `nsenter` into the right namespace.
+
+Then SSH in using the tailnet hostname:
+
+```sh
+ssh nginx-demo.your-tailnet.ts.net
+```
+
+### All configuration variables
+
+These are set as environment variables in `[Service]` or as network/container
+options:
+
+| Variable | Option | Required | Description |
+|----------|--------|----------|-------------|
+| `TS_AUTHKEY` | — | Yes | Tailscale auth key (use ephemeral, single-use) |
+| `TS_HOSTNAME` | `hostname` | Yes | Node hostname on the tailnet |
+| `TS_EXIT_NODE` | `exit_node` | No | Exit node IP to route traffic through |
+| `TS_CONTROL_URL` | `control_url` | No | Custom Tailscale control server URL |
+| `TS_SSH_ALLOW` | `ssh_allow` | No | SSH allowlist: `identity:user,...` |
+| `TS_PIDFILE` | `pidfile` | No* | Container pidfile path (required if SSH is enabled) |
+| `TS_SSH_ACCEPT_ENV` | `ssh_accept_env` | No | Env var patterns to forward via SSH (e.g. `LANG,LC_*`) |
+
 ## Testing
 
 ```sh
