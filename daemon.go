@@ -22,6 +22,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -148,6 +149,25 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	} else {
 		log.Printf("warning: MagicDNS not detected; container DNS may not resolve tailnet names")
 	}
+
+	// Keep DERP relay connection alive so inbound traffic always has a path.
+	// Without this, idle nodes become unreachable when the DERP TCP
+	// connection silently dies (tailscale/tailscale#15776).
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, err := lc.Ping(ctx, ip4, tailcfg.PingDisco)
+				if err != nil && ctx.Err() == nil {
+					log.Printf("keepalive ping failed: %v", err)
+				}
+			}
+		}
+	}()
 
 	// Start SSH server if allowlist is configured.
 	if len(cfg.SSHAllow) > 0 {
