@@ -130,6 +130,7 @@ type DaemonConfig struct {
 	SSHAllow      map[string]string `json:"ssh_allow,omitempty"`
 	SSHAcceptEnv  []string          `json:"ssh_accept_env,omitempty"`
 	PidfilePath   string            `json:"pidfile_path,omitempty"`
+	StateDir      string            `json:"state_dir,omitempty"`
 }
 
 // DaemonReady is written by the daemon to signal readiness.
@@ -371,6 +372,9 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 	}
 	if v := os.Getenv("TS_SSH_ACCEPT_ENV"); v != "" {
 		cfg.SSHAcceptEnv = parseAcceptEnv(v)
+	}
+	if v := os.Getenv("TS_STATE_DIR"); v != "" {
+		cfg.StateDir = v
 	}
 
 	// Validate required fields.

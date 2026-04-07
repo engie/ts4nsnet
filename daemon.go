@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -75,11 +76,30 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 		return fmt.Errorf("creating tsnet state dir: %v", err)
 	}
 
+	// Use a persistent FileStore if a state directory is configured,
+	// otherwise fall back to in-memory store.
+	var stateStore ipn.StateStore
+	var persistedStatePath string
+	if cfg.StateDir != "" {
+		if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
+			return fmt.Errorf("creating persistent state dir: %v", err)
+		}
+		persistedStatePath = filepath.Join(cfg.StateDir, "tailscaled.state")
+		s, err := store.NewFileStore(log.Printf, persistedStatePath)
+		if err != nil {
+			return fmt.Errorf("creating file store: %v", err)
+		}
+		stateStore = s
+		log.Printf("using persistent state: %s", persistedStatePath)
+	} else {
+		stateStore = new(mem.Store)
+	}
+
 	srv := &tsnet.Server{
 		Hostname:  cfg.Hostname,
 		AuthKey:   cfg.AuthKey,
 		Ephemeral: true,
-		Store:     new(mem.Store),
+		Store:     stateStore,
 		Tun:       tunDev,
 		Dir:       tsnetDir,
 	}
@@ -91,6 +111,13 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	defer cancel()
 
 	status, err := srv.Up(ctx)
+	if err != nil && persistedStatePath != "" {
+		// Persisted state may be stale or corrupted. Remove it and let
+		// systemd restart us with a clean slate.
+		log.Printf("tsnet.Up failed with persisted state, removing %s: %v", persistedStatePath, err)
+		os.Remove(persistedStatePath)
+		return fmt.Errorf("tsnet.Up: %v (cleared stale state, restart should succeed)", err)
+	}
 	if err != nil {
 		return fmt.Errorf("tsnet.Up: %v", err)
 	}
@@ -107,15 +134,31 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	}
 	log.Printf("tailnet IPs: v4=%v v6=%v", ip4, ip6)
 
+	lc, err := srv.LocalClient()
+	if err != nil {
+		return fmt.Errorf("getting local client: %v", err)
+	}
+
+	// Verify we got the correct hostname — reject names with a -1 suffix
+	// from control plane collisions with stale nodes.
+	st, err := lc.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("getting status for hostname check: %v", err)
+	}
+	if st.Self != nil && st.Self.HostName != cfg.Hostname {
+		srv.Close()
+		if persistedStatePath != "" {
+			os.Remove(persistedStatePath)
+		}
+		return fmt.Errorf("hostname mismatch: requested %q but got %q (stale node not cleaned up?)",
+			cfg.Hostname, st.Self.HostName)
+	}
+
 	// Set exit node if requested.
 	if cfg.ExitNode != "" {
 		exitIP, err := netip.ParseAddr(cfg.ExitNode)
 		if err != nil {
 			return fmt.Errorf("parsing exit_node %q: %v", cfg.ExitNode, err)
-		}
-		lc, err := srv.LocalClient()
-		if err != nil {
-			return fmt.Errorf("getting local client: %v", err)
 		}
 		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			Prefs: ipn.Prefs{
@@ -136,11 +179,7 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	log.Printf("interface %s configured", cfg.TUNName)
 
 	// Check DNS readiness.
-	lc, err := srv.LocalClient()
-	if err != nil {
-		return fmt.Errorf("getting local client: %v", err)
-	}
-	st, err := lc.Status(ctx)
+	st, err = lc.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("getting status: %v", err)
 	}
