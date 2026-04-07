@@ -140,18 +140,22 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	}
 
 	// Verify we got the correct hostname — reject names with a -1 suffix
-	// from control plane collisions with stale nodes.
+	// from control plane collisions with stale nodes. We check DNSName
+	// (the FQDN assigned by the control plane) rather than HostName (the
+	// requested name), because MagicDNS appends -1, -2 etc. to DNSName
+	// on collision while HostName stays as requested.
 	st, err := lc.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("getting status for hostname check: %v", err)
 	}
-	if st.Self != nil && st.Self.HostName != cfg.Hostname {
+	expectedPrefix := cfg.Hostname + "."
+	if st.Self != nil && st.Self.DNSName != "" && !strings.HasPrefix(st.Self.DNSName, expectedPrefix) {
 		srv.Close()
 		if persistedStatePath != "" {
 			os.Remove(persistedStatePath)
 		}
-		return fmt.Errorf("hostname mismatch: requested %q but got %q (stale node not cleaned up?)",
-			cfg.Hostname, st.Self.HostName)
+		return fmt.Errorf("hostname mismatch: requested %q but got DNS name %q (stale node not cleaned up?)",
+			cfg.Hostname, st.Self.DNSName)
 	}
 
 	// Set exit node if requested.
