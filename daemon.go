@@ -194,21 +194,25 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	}
 
 	// Provision a TLS cert and start the renewal loop (opt-in via TS_TLS_CERTS_DIR).
-	// Initial failure is logged but does not crash — the refresher will retry,
-	// and the app-side fallback handles "no certs" by serving plain HTTP.
+	// Runs asynchronously: lc.CertPair can take tens of seconds against a busy
+	// control plane, and blocking the daemon here means ready.json doesn't get
+	// written until certs land, which can exceed the plugin's readyTimeout and
+	// kill the container. App-side handles missing certs by serving plain HTTP
+	// initially and exiting on cert mtime change so systemd restarts it.
 	if cfg.TLSCertsDir != "" {
-		// CertPair requires the node's full ts.net FQDN, not the short hostname.
 		if st.CurrentTailnet == nil || st.CurrentTailnet.MagicDNSSuffix == "" {
 			log.Printf("tls: skipping cert provisioning — MagicDNS suffix not available")
 		} else {
 			fqdn := cfg.Hostname + "." + st.CurrentTailnet.MagicDNSSuffix
-			if err := writeCertPair(ctx, lc, fqdn, cfg.TLSCertsDir); err != nil {
-				log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
-			} else {
-				log.Printf("tls: wrote cert pair to %s (expires %s)",
-					cfg.TLSCertsDir, loadLeafNotAfter(cfg.TLSCertsDir).Format(time.RFC3339))
-			}
-			go startCertRefresher(ctx, lc, fqdn, cfg.TLSCertsDir)
+			go func() {
+				if err := writeCertPair(ctx, lc, fqdn, cfg.TLSCertsDir); err != nil {
+					log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
+				} else {
+					log.Printf("tls: wrote cert pair to %s (expires %s)",
+						cfg.TLSCertsDir, loadLeafNotAfter(cfg.TLSCertsDir).Format(time.RFC3339))
+				}
+				startCertRefresher(ctx, lc, fqdn, cfg.TLSCertsDir)
+			}()
 		}
 	}
 
