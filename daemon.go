@@ -205,7 +205,13 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 		} else {
 			fqdn := cfg.Hostname + "." + st.CurrentTailnet.MagicDNSSuffix
 			go func() {
-				if err := writeCertPair(ctx, lc, fqdn, cfg.TLSCertsDir); err != nil {
+				// Reuse an existing cached cert if it's still well within its
+				// validity window — saves a control-plane round-trip on every
+				// restart/reboot/reimage when TLSCertsDir is persistent.
+				if notAfter := loadLeafNotAfter(cfg.TLSCertsDir); !notAfter.IsZero() && time.Until(notAfter) > certRenewThreshold {
+					log.Printf("tls: using cached cert at %s (expires %s)",
+						cfg.TLSCertsDir, notAfter.Format(time.RFC3339))
+				} else if err := writeCertPair(ctx, lc, fqdn, cfg.TLSCertsDir); err != nil {
 					log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
 				} else {
 					log.Printf("tls: wrote cert pair to %s (expires %s)",
