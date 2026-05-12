@@ -197,13 +197,19 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 	// Initial failure is logged but does not crash — the refresher will retry,
 	// and the app-side fallback handles "no certs" by serving plain HTTP.
 	if cfg.TLSCertsDir != "" {
-		if err := writeCertPair(ctx, lc, cfg.Hostname, cfg.TLSCertsDir); err != nil {
-			log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
+		// CertPair requires the node's full ts.net FQDN, not the short hostname.
+		if st.CurrentTailnet == nil || st.CurrentTailnet.MagicDNSSuffix == "" {
+			log.Printf("tls: skipping cert provisioning — MagicDNS suffix not available")
 		} else {
-			log.Printf("tls: wrote cert pair to %s (expires %s)",
-				cfg.TLSCertsDir, loadLeafNotAfter(cfg.TLSCertsDir).Format(time.RFC3339))
+			fqdn := cfg.Hostname + "." + st.CurrentTailnet.MagicDNSSuffix
+			if err := writeCertPair(ctx, lc, fqdn, cfg.TLSCertsDir); err != nil {
+				log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
+			} else {
+				log.Printf("tls: wrote cert pair to %s (expires %s)",
+					cfg.TLSCertsDir, loadLeafNotAfter(cfg.TLSCertsDir).Format(time.RFC3339))
+			}
+			go startCertRefresher(ctx, lc, fqdn, cfg.TLSCertsDir)
 		}
-		go startCertRefresher(ctx, lc, cfg.Hostname, cfg.TLSCertsDir)
 	}
 
 	// Keep DERP relay connection alive so inbound traffic always has a path.
