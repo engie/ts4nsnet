@@ -230,6 +230,7 @@ options:
 | `TS_SSH_ALLOW` | `ssh_allow` | No | SSH allowlist: `identity:user,...` |
 | `TS_PIDFILE` | `pidfile` | No* | Container pidfile path (required if SSH is enabled) |
 | `TS_SSH_ACCEPT_ENV` | `ssh_accept_env` | No | Env var patterns to forward via SSH (e.g. `LANG,LC_*`) |
+| `TS_TLS_CERTS_DIR` | `tls_certs_dir` | No | Absolute directory where the daemon writes `cert.pem` + `key.pem` (Let's Encrypt via Tailscale) and refreshes them. Bind-mount it into the container so the app can terminate TLS itself. |
 
 ## Testing
 

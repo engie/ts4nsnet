@@ -417,6 +417,45 @@ func TestConfigMerge(t *testing.T) {
 			t.Fatal("expected error for SSH without pidfile")
 		}
 	})
+
+	t.Run("tls_certs_dir from env var", func(t *testing.T) {
+		t.Setenv("TS_AUTHKEY", "tskey-test")
+		t.Setenv("TS_HOSTNAME", "test-host")
+		t.Setenv("TS_CONTROL_URL", "")
+		t.Setenv("TS_EXIT_NODE", "")
+		t.Setenv("TS_SSH_ALLOW", "")
+		t.Setenv("TS_PIDFILE", "")
+		t.Setenv("TS_SSH_ACCEPT_ENV", "")
+		t.Setenv("TS_TLS_CERTS_DIR", "/run/user/1000/tailscale-certs/test")
+
+		cfg, err := buildDaemonConfig("/run/netns/test", &NetworkPluginExec{
+			ContainerID: "abc123", ContainerName: "test-ctr",
+		})
+		if err != nil {
+			t.Fatalf("buildDaemonConfig: %v", err)
+		}
+		if cfg.TLSCertsDir != "/run/user/1000/tailscale-certs/test" {
+			t.Errorf("TLSCertsDir = %q, want %q", cfg.TLSCertsDir, "/run/user/1000/tailscale-certs/test")
+		}
+	})
+
+	t.Run("tls_certs_dir relative path errors", func(t *testing.T) {
+		t.Setenv("TS_AUTHKEY", "tskey-test")
+		t.Setenv("TS_HOSTNAME", "test-host")
+		t.Setenv("TS_CONTROL_URL", "")
+		t.Setenv("TS_EXIT_NODE", "")
+		t.Setenv("TS_SSH_ALLOW", "")
+		t.Setenv("TS_PIDFILE", "")
+		t.Setenv("TS_SSH_ACCEPT_ENV", "")
+		t.Setenv("TS_TLS_CERTS_DIR", "relative/path")
+
+		_, err := buildDaemonConfig("/run/netns/test", &NetworkPluginExec{
+			ContainerID: "abc123", ContainerName: "test-ctr",
+		})
+		if err == nil {
+			t.Fatal("expected error for relative TLS certs dir")
+		}
+	})
 }
 
 // --- Tier 2: tsnet integration tests (no root, fake control + chanTUN) ---

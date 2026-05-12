@@ -131,6 +131,7 @@ type DaemonConfig struct {
 	SSHAcceptEnv  []string          `json:"ssh_accept_env,omitempty"`
 	PidfilePath   string            `json:"pidfile_path,omitempty"`
 	StateDir      string            `json:"state_dir,omitempty"`
+	TLSCertsDir   string            `json:"tls_certs_dir,omitempty"`
 }
 
 // DaemonReady is written by the daemon to signal readiness.
@@ -345,6 +346,9 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 		if v, ok := opts["ssh_accept_env"]; ok {
 			cfg.SSHAcceptEnv = parseAcceptEnv(v)
 		}
+		if v, ok := opts["tls_certs_dir"]; ok {
+			cfg.TLSCertsDir = v
+		}
 	}
 
 	// Layer 3: environment variables (highest priority)
@@ -376,6 +380,9 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 	if v := os.Getenv("TS_STATE_DIR"); v != "" {
 		cfg.StateDir = v
 	}
+	if v := os.Getenv("TS_TLS_CERTS_DIR"); v != "" {
+		cfg.TLSCertsDir = v
+	}
 
 	// Validate required fields.
 	if cfg.AuthKey == "" {
@@ -392,6 +399,9 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 	}
 	if len(cfg.SSHAllow) > 0 && cfg.PidfilePath == "" {
 		return nil, fmt.Errorf("pidfile path is required when SSH is enabled (set TS_PIDFILE or pidfile option)")
+	}
+	if cfg.TLSCertsDir != "" && !filepath.IsAbs(cfg.TLSCertsDir) {
+		return nil, fmt.Errorf("tls_certs_dir must be absolute, got %q", cfg.TLSCertsDir)
 	}
 
 	return cfg, nil

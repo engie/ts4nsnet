@@ -193,6 +193,19 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 		log.Printf("warning: MagicDNS not detected; container DNS may not resolve tailnet names")
 	}
 
+	// Provision a TLS cert and start the renewal loop (opt-in via TS_TLS_CERTS_DIR).
+	// Initial failure is logged but does not crash — the refresher will retry,
+	// and the app-side fallback handles "no certs" by serving plain HTTP.
+	if cfg.TLSCertsDir != "" {
+		if err := writeCertPair(ctx, lc, cfg.Hostname, cfg.TLSCertsDir); err != nil {
+			log.Printf("tls: initial cert provisioning failed (refresher will retry): %v", err)
+		} else {
+			log.Printf("tls: wrote cert pair to %s (expires %s)",
+				cfg.TLSCertsDir, loadLeafNotAfter(cfg.TLSCertsDir).Format(time.RFC3339))
+		}
+		go startCertRefresher(ctx, lc, cfg.Hostname, cfg.TLSCertsDir)
+	}
+
 	// Keep DERP relay connection alive so inbound traffic always has a path.
 	// Without this, idle nodes become unreachable when the DERP TCP
 	// connection silently dies (tailscale/tailscale#15776).
