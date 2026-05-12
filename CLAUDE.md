@@ -22,10 +22,10 @@ go build -o netavark-tailscale-plugin .
 go vet ./...
 
 # Tier 1: Unit tests (no root, no network)
-go test -run 'TestValidateMTU|TestFdTUNCloseEvents|TestPluginJSON|TestStatusBlock|TestConfigMerge|TestReadPidfile|TestValidatePIDNetNS|TestPinNamespaces|TestResolveContainer|TestSSHPayloadParsing|TestSSHHostKeyPersistence|TestParseSSHAllow|TestSSHAllowlist|TestAcceptEnvPair|TestMatchAcceptEnvPattern|TestParseAcceptEnv|TestIsAllowedEnv|TestParsePasswdUser|TestBaseEnvForUser|TestDiscoverContainers|TestProcessStarttime|TestDaemonPIDRoundTrip' -v ./...
+go test -run 'TestValidateMTU|TestFdTUNCloseEvents|TestPluginJSON|TestStatusBlock|TestConfigMerge|TestProcessStarttime|TestDaemonPIDRoundTrip' -v ./...
 
 # Tier 2: Integration tests (no root, fake control + chanTUN)
-go test -run 'TestTsnetConnectsToControl|TestTwoNodesCanCommunicate|TestExitNodeConfig|TestSSHServerConnects' -v ./...
+go test -run 'TestTsnetConnectsToControl|TestTwoNodesCanCommunicate|TestExitNodeConfig' -v ./...
 
 # Tier 3: Namespace tests (requires root)
 sudo go test -run 'TestCreateTUNInNamespace|TestConfigureInterface' -v ./...
@@ -41,28 +41,29 @@ CI runs only Tier 1 tests, `go vet`, and build.
 
 ## Architecture
 
-Five source files, single package `main`:
+Single package `main`:
 
 - **main.go** — Entry point, subcommand dispatch (`info`, `create`, `setup`, `teardown`, `daemon`).
-- **plugin.go** — Netavark plugin protocol: JSON types (Network, NetworkPluginExec, StatusBlock, etc.), plugin handlers, config merging (network options → per-container options → env vars), systemd-run invocation, readiness polling.
+- **plugin.go** — Netavark plugin protocol: JSON types (Network, NetworkPluginExec, StatusBlock, etc.), plugin handlers, config merging (network options → per-container options → env vars), daemon launch, readiness polling.
 - **daemon.go** — Long-running daemon: reads `config.json` from state dir, creates TUN, runs tsnet, configures interface, writes `ready.json`, handles signals.
-- **ssh.go** — SSH server on the tsnet interface. Identifies peers via WhoIs, checks the allowlist (`TS_SSH_ALLOW`), discovers containers via pidfile scanning, and runs commands inside containers via `nsenter`.
 - **netns.go** — Network namespace operations. `createTUNInNamespace()` uses a sacrificial goroutine pattern (LockOSThread + Setns, thread never returned) to create a TUN in the container's namespace. Interface configuration uses raw netlink/ioctl syscalls (no external dependencies).
 - **tun.go** — `fdTUN` struct implementing the `tun.Device` interface, wrapping the file descriptor from namespace creation for use by tsnet.
+- **cert.go** — Optional TLS cert pair provisioning + refresh loop (Let's Encrypt via Tailscale), enabled by `TS_TLS_CERTS_DIR`.
 
 ### Plugin ↔ Daemon lifecycle
 
 ```
 podman run --network tailscale-net ...
   → netavark invokes: netavark-tailscale-plugin setup /run/netns/xxx < JSON
-     → plugin writes config.json to /run/netavark-tailscale-plugin/<container-id>/
-     → plugin runs: systemd-run --user --unit=netavark-tailscale-plugin-<short-id> ... daemon --state-dir=...
+     → plugin writes config.json to the state dir (XDG_RUNTIME_DIR/netavark-tailscale-plugin/<container-id>/)
+     → plugin starts the daemon as a setsid child: <self> daemon --state-dir=...
+     → plugin records daemon PID + starttime in daemon.pid
      → daemon creates TUN, starts tsnet, configures interface
      → daemon writes ready.json (IPs, MAC)
      → plugin polls for ready.json, builds StatusBlock, returns JSON
   → container stops
   → netavark invokes: netavark-tailscale-plugin teardown /run/netns/xxx < JSON
-     → plugin runs: systemctl --user stop netavark-tailscale-plugin-<short-id>
+     → plugin reads daemon.pid, verifies identity via starttime, sends SIGTERM/SIGKILL
      → plugin cleans up state dir
 ```
 
@@ -72,10 +73,6 @@ Config merges three layers (later overrides earlier):
 1. **Network options** (`podman network create --opt key=value`)
 2. **Per-container options** (quadlet `NetworkOptions=key=value`)
 3. **Environment variables** (`TS_AUTHKEY`, `TS_HOSTNAME`, etc.)
-
-### SSH container selection
-
-The SSH username field selects which container to enter. `discoverContainers()` scans `dirname(pidfilePath)` for `*.pid` files, reads each PID, and filters to those sharing the network namespace (via `validatePIDNetNS`). The SSH username must match a pidfile basename (without `.pid`).
 
 ### Key pattern: Sacrificial goroutine
 

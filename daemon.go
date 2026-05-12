@@ -231,25 +231,6 @@ func runDaemon(cfg *DaemonConfig, stateDir string) error {
 		}
 	}()
 
-	// Start SSH server if allowlist is configured.
-	if len(cfg.SSHAllow) > 0 {
-		sshSrv, err := newSSHServer(srv, cfg.NetNSPath, cfg.PidfilePath, stateDir, cfg.SSHAllow, cfg.SSHAcceptEnv)
-		if err != nil {
-			log.Printf("SSH server disabled: %v", err)
-		} else {
-			go func() {
-				if err := sshSrv.run(ctx); err != nil && ctx.Err() == nil {
-					log.Printf("SSH server error: %v", err)
-				}
-			}()
-			var allowPairs []string
-			for identity, user := range cfg.SSHAllow {
-				allowPairs = append(allowPairs, identity+":"+user)
-			}
-			log.Printf("SSH server listening on :22 (allow: %s)", strings.Join(allowPairs, ", "))
-		}
-	}
-
 	// Write ready.json to signal the plugin.
 	ready := DaemonReady{}
 	if ip4.IsValid() {

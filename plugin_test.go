@@ -262,9 +262,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "env-host")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 
 		input := &NetworkPluginExec{
 			ContainerID:   "abc123",
@@ -304,9 +301,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 
 		input := &NetworkPluginExec{
 			ContainerID:   "abc123",
@@ -337,9 +331,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 
 		input := &NetworkPluginExec{
 			ContainerID:   "abc123",
@@ -360,9 +351,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 
 		input := &NetworkPluginExec{
 			ContainerID:   "abc123",
@@ -383,9 +371,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "UPPERCASE")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 
 		input := &NetworkPluginExec{
 			ContainerID:   "abc123",
@@ -398,34 +383,11 @@ func TestConfigMerge(t *testing.T) {
 		}
 	})
 
-	t.Run("ssh without pidfile errors", func(t *testing.T) {
-		t.Setenv("TS_AUTHKEY", "tskey-test")
-		t.Setenv("TS_HOSTNAME", "test-host")
-		t.Setenv("TS_CONTROL_URL", "")
-		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "*:root")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
-
-		input := &NetworkPluginExec{
-			ContainerID:   "abc123",
-			ContainerName: "test-ctr",
-		}
-
-		_, err := buildDaemonConfig("/run/netns/test", input)
-		if err == nil {
-			t.Fatal("expected error for SSH without pidfile")
-		}
-	})
-
 	t.Run("tls_certs_dir from env var", func(t *testing.T) {
 		t.Setenv("TS_AUTHKEY", "tskey-test")
 		t.Setenv("TS_HOSTNAME", "test-host")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 		t.Setenv("TS_TLS_CERTS_DIR", "/run/user/1000/tailscale-certs/test")
 
 		cfg, err := buildDaemonConfig("/run/netns/test", &NetworkPluginExec{
@@ -444,9 +406,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Setenv("TS_HOSTNAME", "test-host")
 		t.Setenv("TS_CONTROL_URL", "")
 		t.Setenv("TS_EXIT_NODE", "")
-		t.Setenv("TS_SSH_ALLOW", "")
-		t.Setenv("TS_PIDFILE", "")
-		t.Setenv("TS_SSH_ACCEPT_ENV", "")
 		t.Setenv("TS_TLS_CERTS_DIR", "relative/path")
 
 		_, err := buildDaemonConfig("/run/netns/test", &NetworkPluginExec{

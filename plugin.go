@@ -118,20 +118,17 @@ type PluginError struct {
 
 // DaemonConfig is written by the plugin to the state dir for the daemon to read.
 type DaemonConfig struct {
-	ContainerID   string            `json:"container_id"`
-	ContainerName string            `json:"container_name"`
-	NetNSPath     string            `json:"netns_path"`
-	Hostname      string            `json:"hostname"`
-	AuthKey       string            `json:"auth_key"`
-	ControlURL    string            `json:"control_url,omitempty"`
-	ExitNode      string            `json:"exit_node,omitempty"`
-	MTU           int               `json:"mtu"`
-	TUNName       string            `json:"tun_name"`
-	SSHAllow      map[string]string `json:"ssh_allow,omitempty"`
-	SSHAcceptEnv  []string          `json:"ssh_accept_env,omitempty"`
-	PidfilePath   string            `json:"pidfile_path,omitempty"`
-	StateDir      string            `json:"state_dir,omitempty"`
-	TLSCertsDir   string            `json:"tls_certs_dir,omitempty"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
+	NetNSPath     string `json:"netns_path"`
+	Hostname      string `json:"hostname"`
+	AuthKey       string `json:"auth_key"`
+	ControlURL    string `json:"control_url,omitempty"`
+	ExitNode      string `json:"exit_node,omitempty"`
+	MTU           int    `json:"mtu"`
+	TUNName       string `json:"tun_name"`
+	StateDir      string `json:"state_dir,omitempty"`
+	TLSCertsDir   string `json:"tls_certs_dir,omitempty"`
 }
 
 // DaemonReady is written by the daemon to signal readiness.
@@ -314,9 +311,6 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 		if v, ok := opts["mtu"]; ok {
 			fmt.Sscanf(v, "%d", &cfg.MTU)
 		}
-		if v, ok := opts["ssh_accept_env"]; ok {
-			cfg.SSHAcceptEnv = parseAcceptEnv(v)
-		}
 	}
 
 	// Layer 2: per-container options (from quadlet NetworkOptions=)
@@ -332,19 +326,6 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 		}
 		if v, ok := opts["mtu"]; ok {
 			fmt.Sscanf(v, "%d", &cfg.MTU)
-		}
-		if v, ok := opts["ssh_allow"]; ok {
-			parsed, err := parseSSHAllow(v)
-			if err != nil {
-				return nil, fmt.Errorf("parsing ssh_allow option: %w", err)
-			}
-			cfg.SSHAllow = parsed
-		}
-		if v, ok := opts["pidfile"]; ok {
-			cfg.PidfilePath = v
-		}
-		if v, ok := opts["ssh_accept_env"]; ok {
-			cfg.SSHAcceptEnv = parseAcceptEnv(v)
 		}
 		if v, ok := opts["tls_certs_dir"]; ok {
 			cfg.TLSCertsDir = v
@@ -363,19 +344,6 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 	}
 	if v := os.Getenv("TS_EXIT_NODE"); v != "" {
 		cfg.ExitNode = v
-	}
-	if v := os.Getenv("TS_SSH_ALLOW"); v != "" {
-		parsed, err := parseSSHAllow(v)
-		if err != nil {
-			return nil, fmt.Errorf("parsing TS_SSH_ALLOW: %w", err)
-		}
-		cfg.SSHAllow = parsed
-	}
-	if v := os.Getenv("TS_PIDFILE"); v != "" {
-		cfg.PidfilePath = v
-	}
-	if v := os.Getenv("TS_SSH_ACCEPT_ENV"); v != "" {
-		cfg.SSHAcceptEnv = parseAcceptEnv(v)
 	}
 	if v := os.Getenv("TS_STATE_DIR"); v != "" {
 		cfg.StateDir = v
@@ -396,9 +364,6 @@ func buildDaemonConfig(nsPath string, input *NetworkPluginExec) (*DaemonConfig, 
 	}
 	if err := validateMTU(cfg.MTU); err != nil {
 		return nil, err
-	}
-	if len(cfg.SSHAllow) > 0 && cfg.PidfilePath == "" {
-		return nil, fmt.Errorf("pidfile path is required when SSH is enabled (set TS_PIDFILE or pidfile option)")
 	}
 	if cfg.TLSCertsDir != "" && !filepath.IsAbs(cfg.TLSCertsDir) {
 		return nil, fmt.Errorf("tls_certs_dir must be absolute, got %q", cfg.TLSCertsDir)
@@ -546,5 +511,3 @@ func writePluginError(format string, args ...any) error {
 	os.Exit(1)
 	return nil // unreachable
 }
-
-// parseAcceptEnv is defined in ssh.go.

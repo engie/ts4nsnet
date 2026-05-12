@@ -153,69 +153,6 @@ systemctl --user start nginx-demo
 The container joins the tailnet as `nginx-demo` and is reachable from any device
 on the same tailnet.
 
-### Enabling SSH into the container
-
-To allow Tailscale SSH access into the running container, add these to
-`[Service]`:
-
-```ini
-Environment=TS_SSH_ALLOW=you@example.com:root
-Environment=TS_PIDFILE=%t/%N.pid
-```
-
-And add `--pidfile` to `[Container]`:
-
-```ini
-PodmanArgs=--pidfile %t/%N.pid
-```
-
-`TS_SSH_ALLOW` is a comma-separated list of `identity:user` pairs — the
-Tailscale identity (login name) allowed to connect, and the container user to
-run commands as (e.g. `root`). `TS_PIDFILE` tells the plugin where podman
-writes the container PID, which is needed to `nsenter` into the right namespace.
-
-The SSH command has the form:
-
-```
-ssh <container>@<tailnet-hostname>
-```
-
-- **hostname** (`<tailnet-hostname>`) is the `TS_HOSTNAME` of the node — it
-  selects which Tailscale node to connect to.
-- **username** (`<container>`) selects which container to enter. It is matched
-  against pidfile basenames (filename without `.pid`) in the `TS_PIDFILE`
-  directory. The `user` in `TS_SSH_ALLOW` is a separate concept — that controls
-  which OS user you run as *inside* the container, not which container you enter.
-
-For a single standalone container:
-
-```sh
-# TS_HOSTNAME=nginx-demo, TS_PIDFILE=%t/nginx-demo.pid
-# Enters container "nginx-demo" as root on the tailnet node "nginx-demo"
-ssh nginx-demo@nginx-demo
-```
-
-### SSH into containers in a pod
-
-When multiple containers share a network namespace (e.g. in a Podman pod), a
-single netavark-tailscale-plugin daemon serves them all. The daemon scans the
-directory containing `TS_PIDFILE` for all `*.pid` files and filters to those
-sharing its network namespace.
-
-Point each container's `--pidfile` at the same directory so they are all
-discoverable. The SSH username then selects which container to enter by pidfile
-basename:
-
-```sh
-# Pod with TS_HOSTNAME=my-pod
-# Pidfiles: %t/web.pid, %t/api.pid (both in the pod's shared netns)
-ssh web@my-pod    # enters the "web" container
-ssh api@my-pod    # enters the "api" container
-```
-
-If the SSH username doesn't match any discovered pidfile, the error message
-lists the available container names.
-
 ### All configuration variables
 
 These are set as environment variables in `[Service]` or as network/container
@@ -227,9 +164,6 @@ options:
 | `TS_HOSTNAME` | `hostname` | Yes | Node hostname on the tailnet |
 | `TS_EXIT_NODE` | `exit_node` | No | Exit node IP to route traffic through |
 | `TS_CONTROL_URL` | `control_url` | No | Custom Tailscale control server URL |
-| `TS_SSH_ALLOW` | `ssh_allow` | No | SSH allowlist: `identity:user,...` |
-| `TS_PIDFILE` | `pidfile` | No* | Container pidfile path (required if SSH is enabled) |
-| `TS_SSH_ACCEPT_ENV` | `ssh_accept_env` | No | Env var patterns to forward via SSH (e.g. `LANG,LC_*`) |
 | `TS_TLS_CERTS_DIR` | `tls_certs_dir` | No | Absolute directory where the daemon writes `cert.pem` + `key.pem` (Let's Encrypt via Tailscale) and refreshes them. Bind-mount it into the container so the app can terminate TLS itself. |
 
 ## Testing

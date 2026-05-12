@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end test: build the netavark plugin, create a podman container,
-# verify it joins the tailnet, SSH into it, then clean up.
+# verify it joins the tailnet, then clean up.
 #
 # Prerequisites:
 #   - podman (rootless, netavark backend)
@@ -18,8 +18,6 @@ NETWORK_NAME="e2e-tailscale"
 CONTAINER_NAME="e2e-test-$$"
 PLUGIN_DIR="$SCRIPT_DIR/.e2e-plugins"
 CONF_DIR="$SCRIPT_DIR/.e2e-conf"
-PIDFILE_DIR="$(mktemp -d)"
-PIDFILE="$PIDFILE_DIR/$CONTAINER_NAME.pid"
 
 cleanup() {
     echo "--- cleanup ---"
@@ -36,7 +34,7 @@ cleanup() {
     fi
 
     # Remove temp dirs and files.
-    rm -rf "$CONF_DIR" "$PLUGIN_DIR" "$PIDFILE_DIR"
+    rm -rf "$CONF_DIR" "$PLUGIN_DIR"
     rm -f "$SCRIPT_DIR/.e2e-authkey.env" "$SCRIPT_DIR/.e2e-tailmint"
 
     echo "cleanup done"
@@ -131,20 +129,17 @@ podman network exists "$NETWORK_NAME" || fail "network not created"
 
 pass "network '$NETWORK_NAME' created"
 
-# --- Run container with SSH enabled ---
+# --- Run container ---
 
 echo "=== run container ==="
 
 # Plugin env vars: exported so podman → netavark → plugin inherits them.
 # TS_AUTHKEY is already exported from sourcing the authkey file.
 export TS_HOSTNAME="$CONTAINER_NAME"
-export TS_SSH_ALLOW="*:root"
-export TS_PIDFILE="$PIDFILE"
 
 podman run -d \
     --name "$CONTAINER_NAME" \
     --network "$NETWORK_NAME" \
-    --pidfile "$PIDFILE" \
     docker.io/library/alpine:latest \
     sleep 3600
 
@@ -183,26 +178,6 @@ echo "  resolv.conf: $dns"
 echo "$dns" | grep -q "100.100.100.100" || fail "MagicDNS resolver not configured in container"
 
 pass "container joined tailnet at $ip"
-
-# --- Test SSH ---
-
-echo "=== test SSH ==="
-
-# SSH into the container via its tailnet IP.
-# Username = container name (matches pidfile basename), maps to root via allowlist.
-ssh_out=$(ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "$CONTAINER_NAME@$ip" 'echo SSH_OK; id; hostname' 2>&1) && ssh_rc=0 || ssh_rc=$?
-
-echo "  SSH output: $ssh_out"
-
-if echo "$ssh_out" | grep -q "SSH_OK"; then
-    pass "SSH into container works"
-elif echo "$ssh_out" | grep -q "not found\|available:"; then
-    # SSH server is reachable but container selection failed — still proves connectivity.
-    pass "SSH server reachable (container selection issue: $ssh_out)"
-else
-    fail "SSH failed (rc=$ssh_rc): $ssh_out"
-fi
 
 # --- Test teardown ---
 
